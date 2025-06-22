@@ -1,155 +1,119 @@
 import streamlit as st
-from docxtpl import DocxTemplate, InlineImage
-from docx.shared import Mm
-import os
-import glob
-from googleapiclient.discovery import build
+import pandas as pd
+import gspread
 from google.oauth2.service_account import Credentials
+from docx import Document
+from docx.shared import Inches
 import tempfile
 import shutil
+import os
 import zipfile
-import pandas as pd
+from PIL import Image
 
-# --- CONFIG ---
-SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI'
-SHEET_NAME = 'Reports'
-CREDENTIALS_PATH = "credentials.json"
-TEMPLATE_PATH = "Site_Report_Template.docx"
-LOGO_PATH = "ibc_logo.png"   # Place your IBC Group logo here
-
-PRIMARY_COLOR = "#1B365D"    # IBC blue (adjust as desired)
-
-# --- Streamlit Setup ---
 st.set_page_config(
-    page_title="IBC Group – 15kV Kigali Reporting",
-    page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else "📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="15kV Kigali Project – Daily Report Generator",
+    layout="wide"
 )
 
-# --- Header / Branding ---
-col1, col2 = st.columns([1,6])
-with col1:
-    if os.path.exists(LOGO_PATH):
-        st.image(LOGO_PATH, width=80)
-    else:
-        st.markdown(f"<div style='height:80px'></div>", unsafe_allow_html=True)
-with col2:
-    st.markdown(f"""
-        <h1 style="color:{PRIMARY_COLOR};margin-bottom:0;">IBC Group</h1>
-        <h3 style="color:#333;margin-top:0;">15kV Kigali Project – Daily Report Generator</h3>
-        """, unsafe_allow_html=True)
+st.title("15kV Kigali Project – Daily Report Generator")
+st.info(
+    "Welcome! Easily generate professional daily site reports for the 15kV Kigali project. "
+    "Select sites/dates, upload images, and download your reports instantly."
+)
 
-st.markdown("---")
+# SHEET SETTINGS – Replace these with your actual IDs/names if changed
+SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeX3giDONSejJ9gUbUeCI'
+SHEET_NAME = 'Reports'
 
-st.info("Welcome! Easily generate professional daily site reports for the 15kV Kigali project. Select sites/dates, upload images, and download your reports instantly.")
+TEMPLATE_PATH = 'Site_Report_Template.docx'
 
-# --- Google Sheets API setup ---
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-service = build('sheets', 'v4', credentials=creds)
-sheet = service.spreadsheets()
-
+# Function to get data from Google Sheets
+@st.cache_data(ttl=3600)
 def get_sheet_data():
-    result = sheet.values().get(
-        spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A2:E500"
-    ).execute()
-    rows = result.get('values', [])
-    padded_rows = [row + [""] * (5 - len(row)) for row in rows]
-    return padded_rows
+    creds_dict = st.secrets["google_service_account"]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+    creds = Credentials.from_service_account_info(dict(creds_dict), scopes=scopes)
+    gc = gspread.authorize(creds)
+    ws = gc.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
+    df = pd.DataFrame(ws.get_all_records())
+    return df
 
-def get_unique_sites_and_dates(rows):
-    sites = sorted(list(set(row[1].strip() for row in rows if len(row) > 1)))
-    dates = sorted(list(set(row[0].strip() for row in rows if len(row) > 0)))
-    return sites, dates
+def insert_images_to_docx(doc: Document, image_paths, caption=None):
+    for img_path in image_paths:
+        # Insert image (resize to width=5 inches for uniformity)
+        doc.add_picture(img_path, width=Inches(5))
+        if caption:
+            doc.add_paragraph(caption)
+        doc.add_paragraph("")  # Add space after image
 
-rows = get_sheet_data()
-sites, all_dates = get_unique_sites_and_dates(rows)
+def generate_report(row, images, output_dir):
+    doc = Document(TEMPLATE_PATH)
+    # Replace placeholders
+    for p in doc.paragraphs:
+        if "{SITE_NAME}" in p.text:
+            p.text = p.text.replace("{SITE_NAME}", str(row["SITE_NAME"]))
+        if "{DATE}" in p.text:
+            p.text = p.text.replace("{DATE}", str(row["Date"]))
+        if "{CIVIL_WORKS}" in p.text:
+            p.text = p.text.replace("{CIVIL_WORKS}", str(row["CIVIL_WORKS"]))
+        if "{PLANNING}" in p.text:
+            p.text = p.text.replace("{PLANNING}", str(row["PLANNING"]))
+        if "{CHALLENGES}" in p.text:
+            p.text = p.text.replace("{CHALLENGES}", str(row["CHALLENGES"]))
+    # Optionally add images to end
+    if images:
+        doc.add_page_break()
+        doc.add_paragraph("Site Images:")
+        insert_images_to_docx(doc, images)
+    # Output path
+    fname = f"SITE DAILY REPORT_{row['SITE_NAME'].replace(' ', '_')}_{row['Date']}.docx"
+    fpath = os.path.join(output_dir, fname)
+    doc.save(fpath)
+    return fpath
 
-with st.sidebar:
-    st.markdown("### 1. Select Sites")
-    site_choices = ["All Sites"] + sites
-    selected_sites = st.multiselect("Choose sites:", site_choices, default=["All Sites"])
-    if "All Sites" in selected_sites:
-        selected_sites = sites
+# MAIN APP LOGIC
+df = get_sheet_data()
+all_sites = df['SITE_NAME'].drop_duplicates().tolist()
+dates = df['Date'].drop_duplicates().tolist()
 
-    st.markdown("### 2. Select Dates")
-    site_dates = sorted(list(set(row[0].strip() for row in rows if row[1].strip() in selected_sites)))
-    date_choices = ["All Dates"] + site_dates
-    selected_dates = st.multiselect("Choose dates:", date_choices, default=["All Dates"])
-    if "All Dates" in selected_dates:
-        selected_dates = site_dates
+with st.form("report_form"):
+    selected_sites = st.multiselect("Select site(s) to generate reports for:", all_sites)
+    selected_date = st.selectbox("Select date:", dates)
+    images = st.file_uploader(
+        "Upload image(s) for the report (optional):",
+        accept_multiple_files=True, type=['jpg', 'jpeg', 'png']
+    )
+    submit_btn = st.form_submit_button("Generate Reports")
 
-    st.markdown("---")
-    st.markdown(f"""
-    <div style="font-size:0.9em;color:gray;">
-        <b>IBC Group Reporting System</b><br>
-        For help, contact your IT department.
-    </div>
-    """, unsafe_allow_html=True)
-
-# Filter rows for preview
-filtered_rows = [row for row in rows if row[1].strip() in selected_sites and row[0].strip() in selected_dates]
-
-# Preview Table
-st.markdown("### Preview: Reports to be Generated")
-if filtered_rows:
-    df_preview = pd.DataFrame(filtered_rows, columns=["Date", "Site", "Civil Works", "Planning", "Challenges"])
-    st.dataframe(df_preview, use_container_width=True, hide_index=True)
-else:
-    st.warning("No reports match your selection.")
-
-# Image Uploads
-st.markdown("### 3. Upload Images (Optional)")
-st.caption("You can upload images for each site and date (expand each section). Images will appear in the relevant reports.")
-
-site_date_pairs = sorted(set((row[1].strip(), row[0].strip()) for row in filtered_rows))
-uploaded_image_mapping = {}
-if len(site_date_pairs) > 0:
-    for idx, (site, date) in enumerate(site_date_pairs):
-        with st.expander(f"Upload Images for {site} ({date})"):
-            imgs = st.file_uploader(f"Images for {site} ({date})", accept_multiple_files=True, key=f"{site}_{date}")
-            uploaded_image_mapping[(site, date)] = imgs
-
-# Report Generation Button
-if st.button("🚀 Generate & Download All Reports"):
-    with st.spinner("Generating reports, please wait..."):
+if submit_btn and selected_sites:
+    with st.spinner("Generating reports..."):
         temp_dir = tempfile.mkdtemp()
-        zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-        with zipfile.ZipFile(zip_buffer, "w") as zipf:
-            for row in filtered_rows:
-                date, site, civil_works, planning, challenges = (row + [""] * 5)[:5]
-                tpl = DocxTemplate(TEMPLATE_PATH)
-                # Attach images if uploaded for this site/date
-                image_files = uploaded_image_mapping.get((site, date), [])
-                images = []
-                for img_file in image_files:
-                    img_path = os.path.join(temp_dir, img_file.name)
-                    with open(img_path, "wb") as f:
-                        f.write(img_file.getbuffer())
-                    images.append(InlineImage(tpl, img_path, width=Mm(70)))
-                context = {
-                    'SITE_NAME': site,
-                    'DATE': date,
-                    'CIVIL_WORKS': civil_works,
-                    'PLANNING': planning,
-                    'CHALLENGES': challenges,
-                    'ALL_IMAGES': images
-                }
-                filename = f"SITE DAILY REPORT_{site}_{date.replace('/', '.')}.docx"
-                tpl.render(context)
-                out_path = os.path.join(temp_dir, filename)
-                tpl.save(out_path)
-                zipf.write(out_path, arcname=filename)
-        st.success("All reports generated successfully!")
-        with open(zip_buffer.name, "rb") as f:
-            st.download_button("⬇️ Download All Reports (ZIP)", data=f, file_name="reports.zip")
-        shutil.rmtree(temp_dir)
-        os.remove(zip_buffer.name)
-
-st.markdown("---")
-st.markdown(
-    "<div style='text-align:center;color:gray;font-size:0.9em;'>Powered by <b>IBC Group</b> | Kigali 15kV Project Reporting System</div>",
-    unsafe_allow_html=True
-)
+        reports = []
+        for site in selected_sites:
+            row = df[(df["SITE_NAME"] == site) & (df["Date"] == selected_date)]
+            if row.empty:
+                st.warning(f"No data found for {site} on {selected_date}")
+                continue
+            row = row.iloc[0]
+            img_paths = []
+            if images:
+                site_img_dir = os.path.join(temp_dir, site.replace(' ', '_'))
+                os.makedirs(site_img_dir, exist_ok=True)
+                for img in images:
+                    img_path = os.path.join(site_img_dir, img.name)
+                    image = Image.open(img)
+                    image.save(img_path)
+                    img_paths.append(img_path)
+            report_path = generate_report(row, img_paths, temp_dir)
+            reports.append(report_path)
+        # Zip all reports
+        if reports:
+            zip_path = os.path.join(temp_dir, f"Reports_{selected_date}.zip")
+            with zipfile.ZipFile(zip_path, 'w') as zf:
+                for rep in reports:
+                    zf.write(rep, os.path.basename(rep))
+            st.success(f"Generated {len(reports)} reports.")
+            with open(zip_path, "rb") as f:
+                st.download_button("Download all reports (ZIP)", data=f, file_name=os.path.basename(zip_path))
+        else:
+            st.error("No reports generated. Please check your selections.")
