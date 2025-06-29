@@ -88,7 +88,7 @@ with st.sidebar:
         """)
     st.markdown("---")
 
-st.title("📑 Site Daily Report Generator (Pro)")
+st.title("📑 Site Daily Report Generator (Iranzi)")
 
 # --- LOAD DATA WITH ERROR HANDLING ---
 try:
