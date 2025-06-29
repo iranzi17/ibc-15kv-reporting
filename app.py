@@ -60,7 +60,7 @@ def get_unique_sites_and_dates(rows):
     dates = sorted(list(set(row[0].strip() for row in rows if len(row) > 0)))
     return sites, dates
 
-st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
+st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Iranzi)")
 
 # --- SIDEBAR: Navigation, Branding, Help ---
 with st.sidebar:
