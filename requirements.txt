@@ -1,9 +1,7 @@
 streamlit
-docxtpl
-python-docx
-google-api-python-client
-google-auth
-google-auth-httplib2
-pillow
 pandas
 gspread
+google-auth
+python-docx
+docxtpl
+pillow
