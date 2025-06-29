@@ -1,7 +1,0 @@
-streamlit
-pandas
-gspread
-google-auth
-python-docx
-docxtpl
-pillow
