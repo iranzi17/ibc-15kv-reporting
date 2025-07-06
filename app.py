@@ -223,25 +223,32 @@ def generate_hf_summary(text, hf_token):
 
 st.header("🗓️ Generate Weekly Electrical Consultant Report")
 
+def parse_any_date(datestr):
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(datestr, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"Unknown date format: {datestr}")
+
+st.header("🗓️ Generate Weekly Electrical Consultant Report")
+
 with st.expander("Step 1: Select Week and Generate Report", expanded=True):
     # --- Week picker
     week_start = st.date_input("Start of Week", value=datetime.today()-timedelta(days=6))
     week_end = st.date_input("End of Week", value=datetime.today())
 
     # --- Filter your existing daily rows by week
-    # Use your own daily data variable. Here, 'rows' should be your list of all daily entries.
-    # Each row: [date, site, civil_works, electrical_work, planning, challenges]
-    
     week_rows = []
-for row in rows:
-    try:
-        row_date = parse_any_date(row[0])
-        if week_start <= row_date <= week_end:
-            week_rows.append(row)
-    except Exception:
-        continue  # Optionally log errors here
+    for row in rows:
+        try:
+            row_date = parse_any_date(row[0])
+            if week_start <= row_date <= week_end:
+                week_rows.append(row)
+        except Exception:
+            continue  # Optionally log errors here
 
-
+    st.write(f"Found {len(week_rows)} daily reports in this week.")  # <--- For debugging
 
     if week_rows:
         # --- Concatenate data for the summary
@@ -251,7 +258,6 @@ for row in rows:
         )
 
         # --- Extract other fields for the context
-        # You can customize these aggregations as you wish!
         issues = "\n".join([row[5] for row in week_rows if row[5]])
         difficulties = "\n".join([row[5] for row in week_rows if "difficult" in row[5].lower()])
         ongoing_activities = "\n".join([row[3] for row in week_rows if row[3]])
@@ -298,7 +304,6 @@ for row in rows:
     else:
         st.info("No daily reports found in this week’s range. Try different dates.")
 
-st.caption("Tip: Update your Hugging Face API token and project name in the code.")
 
 
 # --- Footer Info ---
