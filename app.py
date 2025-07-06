@@ -231,9 +231,16 @@ with st.expander("Step 1: Select Week and Generate Report", expanded=True):
     # --- Filter your existing daily rows by week
     # Use your own daily data variable. Here, 'rows' should be your list of all daily entries.
     # Each row: [date, site, civil_works, electrical_work, planning, challenges]
-    week_rows = [
-        row for row in rows
-        if week_start.strftime('%Y-%m-%d') <= row[0][:10] <= week_end.strftime('%Y-%m-%d')
+    
+    week_rows = []
+for row in rows:
+    try:
+        row_date = parse_any_date(row[0])
+        if week_start <= row_date <= week_end:
+            week_rows.append(row)
+    except Exception:
+        continue  # Optionally log errors here
+
     ]
 
     if week_rows:
