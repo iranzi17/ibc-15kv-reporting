@@ -203,6 +203,15 @@ from datetime import datetime, timedelta
 from docxtpl import DocxTemplate
 import requests
 
+def parse_any_date(datestr):
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(datestr, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"Unknown date format: {datestr}")
+
+
 # --------------- SETTINGS ---------------
 WEEKLY_TEMPLATE_PATH = "Weekly reports template.docx"
 YOUR_HF_TOKEN = "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"   # <-- Replace with your actual Hugging Face token
