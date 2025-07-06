@@ -241,7 +241,7 @@ for row in rows:
     except Exception:
         continue  # Optionally log errors here
 
-    ]
+
 
     if week_rows:
         # --- Concatenate data for the summary
