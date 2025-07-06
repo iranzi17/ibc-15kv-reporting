@@ -214,7 +214,7 @@ def parse_any_date(datestr):
 
 # --------------- SETTINGS ---------------
 WEEKLY_TEMPLATE_PATH = "Weekly reports template.docx"
-YOUR_HF_TOKEN = "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"   # <-- Replace with your actual Hugging Face token
+YOUR_HF_TOKEN = "YOUR_HF_TOKEN_HERE"   # <-- Replace with your actual Hugging Face token
 
 def generate_hf_summary(text, hf_token):
     API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
