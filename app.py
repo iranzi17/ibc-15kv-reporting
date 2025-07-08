@@ -66,7 +66,7 @@ st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Iranz
 with st.sidebar:
     # Branding/logo
     try:
-        st.image("logo.png", width=150)
+        st.image("ibc_logo.png", width=150)
     except Exception:
         pass  # If no logo, ignore
     st.markdown("### 🧭 Steps to Generate Reports")
