@@ -10,6 +10,8 @@ import zipfile
 import pandas as pd
 import json  # NEW: for reading from secrets
 
+from utils import parse_any_date
+
 st.markdown(
     """
     <style>
@@ -203,14 +205,6 @@ from datetime import datetime, timedelta
 from docxtpl import DocxTemplate
 import requests
 
-def parse_any_date(datestr):
-    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(datestr, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"Unknown date format: {datestr}")
-
 
 # --------------- SETTINGS ---------------
 WEEKLY_TEMPLATE_PATH = "Weekly reports template.docx"
@@ -229,16 +223,6 @@ def generate_hf_summary(text, hf_token):
         return response.json()[0]['summary_text']
     except Exception:
         return "Summary not available. Please check your Hugging Face token or try again later."
-
-st.header("🗓️ Generate Weekly Electrical Consultant Report")
-
-def parse_any_date(datestr):
-    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(datestr, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"Unknown date format: {datestr}")
 
 st.header("🗓️ Generate Weekly Electrical Consultant Report")
 
