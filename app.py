@@ -1,3 +1,18 @@
+
+import streamlit as st
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm
+import os
+from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials
+import tempfile
+import shutil
+import zipfile
+import pandas as pd
+import json  # NEW: for reading from secrets
+
+from utils import parse_any_date
+
 import streamlit as st
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
@@ -201,6 +216,12 @@ if st.button("🚀 Generate & Download All Reports"):
             os.remove(zip_buffer.name)
 
 
+import streamlit as st
+from datetime import datetime, timedelta
+from docxtpl import DocxTemplate
+import requests
+
+
 
 def parse_any_date(datestr):
     for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
@@ -209,6 +230,7 @@ def parse_any_date(datestr):
         except ValueError:
             continue
     raise ValueError(f"Unknown date format: {datestr}")
+
 
 
 # --------------- SETTINGS ---------------
@@ -227,12 +249,18 @@ def generate_hf_summary(text, hf_token):
     try:
         return response.json()[0]['summary_text']
     except Exception:
-        return "Summary not available. Please check your Hugging Face token or try again later."
+        return "Summary not available. Please check your Hugging Face token or try again later.
+
+st.header("🗓️ Generate Weekly Electrical Consultant Report")
+
+with st.expander("Step 1: Select Week and Generate Report", expanded=True):
+
 
 
 st.header("🗓️ Generate Weekly Electrical Consultant Report")
 
 with st.expander("Step 1: Select Week and Generate Report", expanded=True):
+
     # --- Week picker
     week_start = st.date_input("Start of Week", value=datetime.today()-timedelta(days=6))
     week_end = st.date_input("End of Week", value=datetime.today())
