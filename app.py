@@ -11,7 +11,6 @@ import zipfile
 import pandas as pd
 import json  # NEW: for reading from secrets
 from datetime import datetime, timedelta
-import requests
 
 from utils import parse_any_date
 
@@ -208,19 +207,8 @@ if st.button("🚀 Generate & Download All Reports"):
 WEEKLY_TEMPLATE_PATH = "Weekly reports template.docx"
 HF_TOKEN = st.secrets.get("HF_TOKEN")
 
-def generate_hf_summary(text, hf_token):
-    API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-    headers = {"Authorization": f"Bearer {hf_token}"}
-    prompt = (
-        "You are an experienced electrical engineering consultant. Summarize the following daily site reports "
-        "into a natural, professional, and human-sounding weekly progress summary:\n\n" + text
-    )
-    payload = {"inputs": prompt}
-    response = requests.post(API_URL, headers=headers, json=payload)
-    try:
-        return response.json()[0]['summary_text']
-    except Exception:
-        return "Summary not available. Please check your Hugging Face token or try again later."
+# import the summarization helper from a separate module so it can be tested in isolation
+from summary_utils import generate_hf_summary
 
 
 st.header("🗓️ Generate Weekly Electrical Consultant Report")
