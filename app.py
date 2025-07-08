@@ -10,22 +10,10 @@ import shutil
 import zipfile
 import pandas as pd
 import json  # NEW: for reading from secrets
-
-from utils import parse_any_date
-
-import streamlit as st
-from docxtpl import DocxTemplate, InlineImage
-from docx.shared import Mm
-import os
-from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
-import tempfile
-import shutil
-import zipfile
-import pandas as pd
-import json  # NEW: for reading from secrets
 from datetime import datetime, timedelta
 import requests
+
+from utils import parse_any_date
 
 st.markdown(
     """
@@ -216,23 +204,6 @@ if st.button("🚀 Generate & Download All Reports"):
             os.remove(zip_buffer.name)
 
 
-import streamlit as st
-from datetime import datetime, timedelta
-from docxtpl import DocxTemplate
-import requests
-
-
-
-def parse_any_date(datestr):
-    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(datestr, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"Unknown date format: {datestr}")
-
-
-
 # --------------- SETTINGS ---------------
 WEEKLY_TEMPLATE_PATH = "Weekly reports template.docx"
 YOUR_HF_TOKEN = "YOUR_HF_TOKEN_HERE"   # <-- Replace with your actual Hugging Face token
@@ -249,12 +220,7 @@ def generate_hf_summary(text, hf_token):
     try:
         return response.json()[0]['summary_text']
     except Exception:
-        return "Summary not available. Please check your Hugging Face token or try again later.
-
-st.header("🗓️ Generate Weekly Electrical Consultant Report")
-
-with st.expander("Step 1: Select Week and Generate Report", expanded=True):
-
+        return "Summary not available. Please check your Hugging Face token or try again later."
 
 
 st.header("🗓️ Generate Weekly Electrical Consultant Report")
