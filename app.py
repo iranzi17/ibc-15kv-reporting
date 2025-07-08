@@ -35,7 +35,7 @@ st.markdown(
 # --- CONFIG ---
 SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI'
 SHEET_NAME = 'Reports'
-TEMPLATE_PATH = "Site_Report_Template.docx"
+TEMPLATE_PATH = "New daily reports template.docx"
 
 # --- Google Sheets API setup ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
@@ -181,14 +181,17 @@ if st.button("🚀 Generate & Download All Reports"):
                             f.write(image_files[1].getbuffer())
                         image2 = InlineImage(tpl, img2_path, width=Mm(70))
                     context = {
-                        'SITE_NAME': site,
-                        'DATE': date,
-                        'CIVIL_WORKS': civil_works,
-                        'ELECTRICAL_WORK': electrical_work,
-                        'PLANNING': planning,
-                        'CHALLENGES': challenges,
-                        'IMAGE1': image1,
-                        'IMAGE2': image2
+                        'Site Name': site,
+                        'Date': date,
+                        'Civil Works': civil_works,
+                        'General recommendation': electrical_work,
+                        'Comments about the activities performed and challenges faced': planning,
+                        'Challenges': challenges,
+                        'Cabin  or Underground Cables': '',
+                        'District': '',
+                        'Personnel': '',
+                        'Materials and equipment': '',
+                        'Comments about observation on rules of HEALTH, SAFETY & ENVIRONMENT': '',
                     }
                     filename = f"SITE DAILY REPORT_{site}_{date.replace('/', '.')}.docx"
                     tpl.render(context)
