@@ -206,7 +206,7 @@ if st.button("🚀 Generate & Download All Reports"):
 
 # --------------- SETTINGS ---------------
 WEEKLY_TEMPLATE_PATH = "Weekly reports template.docx"
-YOUR_HF_TOKEN = "YOUR_HF_TOKEN_HERE"   # <-- Replace with your actual Hugging Face token
+HF_TOKEN = st.secrets.get("HF_TOKEN")
 
 def generate_hf_summary(text, hf_token):
     API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
@@ -263,7 +263,7 @@ with st.expander("Step 1: Select Week and Generate Report", expanded=True):
 
         if st.button("✨ Generate and Download Weekly Report (.docx)"):
             with st.spinner("Generating summary and filling template..."):
-                summary = generate_hf_summary(week_text, YOUR_HF_TOKEN)
+                summary = generate_hf_summary(week_text, HF_TOKEN)
 
                 context = {
                     "WEEK_NO": week_start.isocalendar()[1],
