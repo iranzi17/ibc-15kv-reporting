@@ -1,0 +1,22 @@
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+
+# Test caches
+.pytest_cache/
+
+# Virtual environments
+venv/
+ENV/
+.env
+.env*
+.venv/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Packaging
+*.egg-info/
+
+# OS artifacts
+.DS_Store

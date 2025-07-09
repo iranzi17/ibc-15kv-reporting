@@ -13,6 +13,25 @@ HF_TOKEN = "your_huggingface_token"
 
 The application retrieves the token using `st.secrets.get("HF_TOKEN")`.
 
+## Providing Google Credentials
+
+The app also needs access to your reporting Google Sheet. Create a Google
+service account and download its credential JSON file. Add the full JSON
+contents under the key `GOOGLE_CREDENTIALS` in the same
+`.streamlit/secrets.toml` file:
+
+```
+# .streamlit/secrets.toml
+HF_TOKEN = "your_huggingface_token"
+
+GOOGLE_CREDENTIALS = """
+{ "type": "service_account", "project_id": "...", ... }
+"""
+```
+
+The credentials are parsed with `json.loads(st.secrets["GOOGLE_CREDENTIALS"])`
+when the app starts.
+
 ## Google Sheet Setup
 
 The app expects data in a Google Sheet named **Reports**. Columns **A** through
