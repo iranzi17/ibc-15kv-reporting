@@ -128,9 +128,14 @@ with st.sidebar:
 # --- Preview Table ---
 with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
     if filtered_rows:
-        # Now include Electrical Work in columns
+        # Preview using the new column order from the Google Sheet
         df_preview = pd.DataFrame(filtered_rows, columns=[
-            "Date", "Site", "Civil Works", "Electrical Work", "Planning", "Challenges"
+            "Site Name",
+            "Date",
+            "Civil Works",
+            "General recommendation",
+            "Comments about the activities performed and challenges faced",
+            "Challenges",
         ])
         st.dataframe(df_preview, use_container_width=True, hide_index=True)
     else:
@@ -164,8 +169,8 @@ if st.button("🚀 Generate & Download All Reports"):
             progress = st.progress(0)
             with zipfile.ZipFile(zip_buffer, "w") as zipf:
                 for idx, row in enumerate(filtered_rows):
-                    # Now extract 6 columns!
-                    date, site, civil_works, electrical_work, planning, challenges = (row + [""] * 6)[:6]
+                    # Extract the columns in the order defined in the sheet
+                    site, date, civil_works, general_rec, comments, challenges = (row + [""] * 6)[:6]
                     tpl = DocxTemplate(TEMPLATE_PATH)
                     # Attach up to two images for this site/date (side-by-side support)
                     image_files = uploaded_image_mapping.get((site, date), [])
@@ -184,8 +189,8 @@ if st.button("🚀 Generate & Download All Reports"):
                         'Site Name': site,
                         'Date': date,
                         'Civil Works': civil_works,
-                        'General recommendation': electrical_work,
-                        'Comments about the activities performed and challenges faced': planning,
+                        'General recommendation': general_rec,
+                        'Comments about the activities performed and challenges faced': comments,
                         'Challenges': challenges,
                         'Cabin  or Underground Cables': '',
                         'District': '',
@@ -237,7 +242,7 @@ with st.expander("Step 1: Select Week and Generate Report", expanded=True):
     if week_rows:
         # --- Concatenate data for the summary
         week_text = "\n\n".join(
-            f"Date: {row[0]}\nSite: {row[1]}\nCivil: {row[2]}\nElectrical: {row[3]}\nPlan: {row[4]}\nChallenges: {row[5]}"
+            f"Date: {row[1]}\nSite: {row[0]}\nCivil: {row[2]}\nRecommendation: {row[3]}\nComments: {row[4]}\nChallenges: {row[5]}"
             for row in week_rows
         )
 
