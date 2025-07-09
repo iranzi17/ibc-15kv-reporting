@@ -60,8 +60,9 @@ def get_sheet_data(service):
     return padded_rows
 
 def get_unique_sites_and_dates(rows):
-    sites = sorted(list(set(row[1].strip() for row in rows if len(row) > 1)))
-    dates = sorted(list(set(row[0].strip() for row in rows if len(row) > 0)))
+    """Return sorted unique site names and dates from the sheet rows."""
+    sites = sorted({row[0].strip() for row in rows if len(row) > 0})
+    dates = sorted({row[1].strip() for row in rows if len(row) > 1})
     return sites, dates
 
 st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Iranzi)")
@@ -112,14 +113,14 @@ with st.expander("Step 1: Select Sites", expanded=True):
 
 # --- UI: Date Selection ---
 with st.expander("Step 2: Select Dates", expanded=False):
-    site_dates = sorted(list(set(row[0].strip() for row in rows if row[1].strip() in selected_sites)))
+    site_dates = sorted({row[1].strip() for row in rows if row[0].strip() in selected_sites})
     date_choices = ["All Dates"] + site_dates
     selected_dates = st.multiselect("Choose dates:", date_choices, default=["All Dates"])
     if "All Dates" in selected_dates:
         selected_dates = site_dates
 
 # --- Filter rows for preview ---
-filtered_rows = [row for row in rows if row[1].strip() in selected_sites and row[0].strip() in selected_dates]
+filtered_rows = [row for row in rows if row[0].strip() in selected_sites and row[1].strip() in selected_dates]
 
 # --- Dynamic report count ---
 with st.sidebar:
@@ -144,7 +145,7 @@ with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
 # --- Image Uploads ---
 with st.expander("Step 4: Upload Images (Optional)", expanded=False):
     st.markdown("You may upload up to **2 images per site/date**. Images will be included side-by-side in the report.")
-    site_date_pairs = sorted(set((row[1].strip(), row[0].strip()) for row in filtered_rows))
+    site_date_pairs = sorted({(row[0].strip(), row[1].strip()) for row in filtered_rows})
     uploaded_image_mapping = {}
     if len(site_date_pairs) > 0:
         for idx, (site, date) in enumerate(site_date_pairs):
@@ -231,7 +232,7 @@ with st.expander("Step 1: Select Week and Generate Report", expanded=True):
     week_rows = []
     for row in rows:
         try:
-            row_date = parse_any_date(row[0])
+            row_date = parse_any_date(row[1])
             if week_start <= row_date <= week_end:
                 week_rows.append(row)
         except Exception:
