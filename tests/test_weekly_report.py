@@ -13,7 +13,9 @@ def generate_hf_summary(text: str, hf_token: str) -> str:
 def build_weekly_context(week_rows, week_start, week_end, hf_token):
     """Replicate the weekly context creation logic from app.py."""
     week_text = "\n\n".join(
-        f"Date: {row[0]}\nSite: {row[1]}\nCivil: {row[2]}\nElectrical: {row[3]}\nPlan: {row[4]}\nChallenges: {row[5]}"
+        (
+            f"Date: {row[1]}\nSite: {row[0]}\nCivil: {row[2]}\nRecommendation: {row[3]}\nComments: {row[4]}\nChallenges: {row[5]}"
+        )
         for row in week_rows
     )
     issues = "\n".join([row[5] for row in week_rows if row[5]])
@@ -51,16 +53,16 @@ def build_weekly_context(week_rows, week_start, week_end, hf_token):
 def test_build_weekly_context_contains_keys():
     week_rows = [
         [
-            "2024-01-01",
             "Site A",
+            "2024-01-01",
             "completed foundation",
             "install cables",
             "plan next",
             "no issues",
         ],
         [
-            "2024-01-02",
             "Site B",
+            "2024-01-02",
             "civil works ongoing",
             "testing equipment",
             "future plan",
