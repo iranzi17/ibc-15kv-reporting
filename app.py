@@ -12,7 +12,7 @@ import pandas as pd
 import json  # NEW: for reading from secrets
 from datetime import datetime, timedelta
 
-from utils import parse_any_date
+from utils import parse_any_date, load_daily_template
 
 st.markdown(
     """
@@ -171,7 +171,7 @@ if st.button("🚀 Generate & Download All Reports"):
                 for idx, row in enumerate(filtered_rows):
                     # Extract the columns in the order defined in the sheet
                     site, date, civil_works, general_rec, comments, challenges = (row + [""] * 6)[:6]
-                    tpl = DocxTemplate(TEMPLATE_PATH)
+                    tpl = load_daily_template(TEMPLATE_PATH)
                     # Attach up to two images for this site/date (side-by-side support)
                     image_files = uploaded_image_mapping.get((site, date), [])
                     image1, image2 = None, None
@@ -186,17 +186,17 @@ if st.button("🚀 Generate & Download All Reports"):
                             f.write(image_files[1].getbuffer())
                         image2 = InlineImage(tpl, img2_path, width=Mm(70))
                     context = {
-                        'Site Name': site,
+                        'Site_Name': site,
                         'Date': date,
-                        'Civil Works': civil_works,
-                        'General recommendation': general_rec,
-                        'Comments about the activities performed and challenges faced': comments,
+                        'Civil_Works': civil_works,
+                        'General_recommendation': general_rec,
+                        'Comments_about_the_activities_performed_and_challenges_faced': comments,
                         'Challenges': challenges,
-                        'Cabin  or Underground Cables': '',
+                        'Cabin_or_Underground_Cables': '',
                         'District': '',
                         'Personnel': '',
-                        'Materials and equipment': '',
-                        'Comments about observation on rules of HEALTH, SAFETY & ENVIRONMENT': '',
+                        'Materials_and_equipment': '',
+                        'Comments_about_observation_on_rules_of_HEALTH_SAFETY_AND_ENVIRONMENT': '',
                     }
                     filename = f"SITE DAILY REPORT_{site}_{date.replace('/', '.')}.docx"
                     tpl.render(context)
