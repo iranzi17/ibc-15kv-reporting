@@ -6,4 +6,3 @@ python-docx
 docxtpl
 pillow
 google-api-python-client
-requests
