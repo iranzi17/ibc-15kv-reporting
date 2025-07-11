@@ -10,7 +10,6 @@ import shutil
 import zipfile
 import pandas as pd
 import json  # NEW: for reading from secrets
-from datetime import datetime, timedelta
 
 from utils import parse_any_date
 
@@ -210,91 +209,6 @@ if st.button("🚀 Generate & Download All Reports"):
                 st.download_button("⬇️ Download All Reports (ZIP)", data=f, file_name="reports.zip")
             shutil.rmtree(temp_dir)
             os.remove(zip_buffer.name)
-
-
-# --------------- SETTINGS ---------------
-WEEKLY_TEMPLATE_PATH = "Weekly reports template.docx"
-HF_TOKEN = st.secrets.get("HF_TOKEN")
-
-# import the summarization helper from a separate module so it can be tested in isolation
-from summary_utils import generate_hf_summary
-
-
-st.header("🗓️ Generate Weekly Electrical Consultant Report")
-
-with st.expander("Step 1: Select Week and Generate Report", expanded=True):
-
-    # --- Week picker
-    week_start = st.date_input("Start of Week", value=datetime.today()-timedelta(days=6))
-    week_end = st.date_input("End of Week", value=datetime.today())
-
-    # --- Filter your existing daily rows by week
-    week_rows = []
-    for row in rows:
-        try:
-            row_date = parse_any_date(row[1])
-            if week_start <= row_date <= week_end:
-                week_rows.append(row)
-        except Exception:
-            continue  # Optionally log errors here
-
-    st.write(f"Found {len(week_rows)} daily reports in this week.")  # <--- For debugging
-
-    if week_rows:
-        # --- Concatenate data for the summary
-        week_text = "\n\n".join(
-            f"Date: {row[1]}\nSite: {row[0]}\nCivil: {row[2]}\nRecommendation: {row[3]}\nComments: {row[4]}\nChallenges: {row[5]}"
-            for row in week_rows
-        )
-
-        # --- Extract other fields for the context
-        issues = "\n".join([row[5] for row in week_rows if row[5]])
-        difficulties = "\n".join([row[5] for row in week_rows if "difficult" in row[5].lower()])
-        ongoing_activities = "\n".join([row[3] for row in week_rows if row[3]])
-        achievements = "\n".join([row[2] for row in week_rows if "complete" in row[2].lower() or "finish" in row[2].lower()])
-        planned_activities = "\n".join([row[4] for row in week_rows if row[4]])
-        hse = "No incidents reported this week."   # Add your logic or field if available
-
-        st.write("Preview of Aggregated Data:")
-        st.code(week_text)
-
-        if st.button("✨ Generate and Download Weekly Report (.docx)"):
-            with st.spinner("Generating summary and filling template..."):
-                summary = generate_hf_summary(week_text, HF_TOKEN)
-
-                context = {
-                    "WEEK_NO": week_start.isocalendar()[1],
-                    "PERIOD_FROM": week_start.strftime('%Y-%m-%d'),
-                    "PERIOD_TO": week_end.strftime('%Y-%m-%d'),
-                    "DOCUMENT_NO": f"WR-{week_start.strftime('%Y%m%d')}-{week_end.strftime('%Y%m%d')}",
-                    "DATE": datetime.today().strftime('%Y-%m-%d'),
-                    "PROJECT_NAME": "15kV Substation Project",  # Or ask user
-                    "SUMMARY": summary,
-                    "PROJECT_PROGRESS": summary,
-                    "ISSUES": issues or "None.",
-                    "DIFFICULTIES": difficulties or "None.",
-                    "ONGOING_ACTIVITIES": ongoing_activities or "See attached summary.",
-                    "ACHIEVEMENTS": achievements or "See attached summary.",
-                    "PLANNED_ACTIVITIES": planned_activities or "See attached summary.",
-                    "HSE": hse,
-                }
-
-                tpl = DocxTemplate(WEEKLY_TEMPLATE_PATH)
-                tpl.render(context)
-                out_path = f"Weekly_Report_{week_start.strftime('%Y%m%d')}_to_{week_end.strftime('%Y%m%d')}.docx"
-                tpl.save(out_path)
-
-                with open(out_path, "rb") as f:
-                    st.download_button(
-                        "⬇️ Download Filled Weekly Report (.docx)",
-                        data=f,
-                        file_name=out_path
-                    )
-            st.success("Report generated!")
-    else:
-        st.info("No daily reports found in this week’s range. Try different dates.")
-
-
 
 # --- Footer Info ---
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
