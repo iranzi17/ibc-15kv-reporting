@@ -11,8 +11,6 @@ import zipfile
 import pandas as pd
 import json  # NEW: for reading from secrets
 
-from utils import parse_any_date
-
 st.markdown(
     """
     <style>
@@ -126,10 +124,7 @@ with st.sidebar:
     st.markdown(f"**Reports to generate:** <span style='color:blue; font-size:1.2em;'>{len(filtered_rows)}</span>", unsafe_allow_html=True)
 
 # --- Preview Table ---
-with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
 
-    else:
-        st.info("No reports match your selection. Please adjust your sites or dates.")
 
 # --- Image Uploads ---
 with st.expander("Step 4: Upload Images (Optional)", expanded=False):
@@ -175,19 +170,7 @@ if st.button("🚀 Generate & Download All Reports"):
                         with open(img2_path, "wb") as f:
                             f.write(image_files[1].getbuffer())
                         image2 = InlineImage(tpl, img2_path, width=Mm(70))
-                    context = {
-                        "Site_Name": site,
-                        "Date": date,
-                        "Civil_Works": civil_works,
-                        "Recommendation": general_rec,
-                        "Comments": comments,
-                        "Challenges": challenges,
-                        "Cabin_or_Underground_Cables": "",
-                        "District": "",
-                        "Personnel": "",
-                        "Materials_and_equipment": "",
-                        "Comments1": "",
-                    }
+
                     filename = f"SITE DAILY REPORT_{site}_{date.replace('/', '.')}.docx"
                     tpl.render(context)
                     out_path = os.path.join(temp_dir, filename)
