@@ -130,12 +130,12 @@ with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
     if filtered_rows:
         # Preview using the new column order from the Google Sheet
         df_preview = pd.DataFrame({
-                        "Site_Name":
-                        "Date":
-                        "Civil_Works":
-                        "Recommendation":
-                        "Comments":
-                        "Challenges":
+                        "Site_Name": "",
+                        "Date": "",
+                        "Civil_Works": "",
+                        "Recommendation": "",
+                        "Comments": "",
+                        "Challenges": "",
                         "Cabin_or_Underground_Cables": "",
                         "District": "",
                         "Personnel": "",
@@ -191,12 +191,12 @@ if st.button("🚀 Generate & Download All Reports"):
                             f.write(image_files[1].getbuffer())
                         image2 = InlineImage(tpl, img2_path, width=Mm(70))
                     context = {
-                        "Site_Name":
-                        "Date":
-                        "Civil_Works":
-                        "Recommendation":
-                        "Comments":
-                        "Challenges":
+                        "Site_Name": "",
+                        "Date": "",
+                        "Civil_Works": "",
+                        "Recommendation": "",
+                        "Comments": "",
+                        "Challenges": "",
                         "Cabin_or_Underground_Cables": "",
                         "District": "",
                         "Personnel": "",
