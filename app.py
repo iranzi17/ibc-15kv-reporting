@@ -129,19 +129,21 @@ with st.sidebar:
 with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
     if filtered_rows:
         # Preview using the new column order from the Google Sheet
-        df_preview = pd.DataFrame({
-                        "Site_Name": "",
-                        "Date": "",
-                        "Civil_Works": "",
-                        "Recommendation": "",
-                        "Comments": "",
-                        "Challenges": "",
-                        "Cabin_or_Underground_Cables": "",
-                        "District": "",
-                        "Personnel": "",
-                        "Materials_and_equipment": "",
-                        "Comments1": "",
-        })
+        df_preview = pd.DataFrame(
+            columns=[
+                "Site_Name",
+                "Date",
+                "Civil_Works",
+                "Recommendation",
+                "Comments",
+                "Challenges",
+                "Cabin_or_Underground_Cables",
+                "District",
+                "Personnel",
+                "Materials_and_equipment",
+                "Comments1",
+            ]
+        )
         st.dataframe(df_preview, use_container_width=True, hide_index=True)
     else:
         st.info("No reports match your selection. Please adjust your sites or dates.")
