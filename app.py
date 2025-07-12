@@ -11,8 +11,6 @@ import zipfile
 import pandas as pd
 import json  # NEW: for reading from secrets
 
-from utils import parse_any_date
-
 st.markdown(
     """
     <style>
@@ -127,21 +125,23 @@ with st.sidebar:
 
 # --- Preview Table ---
 with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
+    columns = [
+        "Site_Name",
+        "Date",
+        "Civil_Works",
+        "Recommendation",
+        "Comments",
+        "Challenges",
+        "Cabin_or_Underground_Cables",
+        "District",
+        "Personnel",
+        "Materials_and_equipment",
+        "Comments1",
+    ]
     if filtered_rows:
-        # Preview using the new column order from the Google Sheet
-        df_preview = pd.DataFrame({
-                        "Site_Name": "",
-                        "Date": "",
-                        "Civil_Works": "",
-                        "Recommendation": "",
-                        "Comments": "",
-                        "Challenges": "",
-                        "Cabin_or_Underground_Cables": "",
-                        "District": "",
-                        "Personnel": "",
-                        "Materials_and_equipment": "",
-                        "Comments1": "",
-        })
+        # Normalize rows to expected length and create DataFrame
+        preview_rows = [row + [""] * (len(columns) - len(row)) for row in filtered_rows]
+        df_preview = pd.DataFrame(preview_rows, columns=columns)
         st.dataframe(df_preview, use_container_width=True, hide_index=True)
     else:
         st.info("No reports match your selection. Please adjust your sites or dates.")
@@ -191,12 +191,12 @@ if st.button("🚀 Generate & Download All Reports"):
                             f.write(image_files[1].getbuffer())
                         image2 = InlineImage(tpl, img2_path, width=Mm(70))
                     context = {
-                        "Site_Name": "",
-                        "Date": "",
-                        "Civil_Works": "",
-                        "Recommendation": "",
-                        "Comments": "",
-                        "Challenges": "",
+                        "Site_Name": site,
+                        "Date": date,
+                        "Civil_Works": civil_works,
+                        "Recommendation": general_rec,
+                        "Comments": comments,
+                        "Challenges": challenges,
                         "Cabin_or_Underground_Cables": "",
                         "District": "",
                         "Personnel": "",
