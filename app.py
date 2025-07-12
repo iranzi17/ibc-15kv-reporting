@@ -130,6 +130,7 @@ with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
     if filtered_rows:
         # Preview using the new column order from the Google Sheet
         df_preview = pd.DataFrame(
+
             {
                 "Site_Name": "",
                 "Date": "",
@@ -144,6 +145,7 @@ with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
                 "Comments1": "",
             },
             index=[0],  # required when constructing from scalars
+
         )
         st.dataframe(df_preview, use_container_width=True, hide_index=True)
     else:
