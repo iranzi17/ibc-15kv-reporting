@@ -124,27 +124,7 @@ with st.sidebar:
     st.markdown(f"**Reports to generate:** <span style='color:blue; font-size:1.2em;'>{len(filtered_rows)}</span>", unsafe_allow_html=True)
 
 # --- Preview Table ---
-with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
-    columns = [
-        "Site_Name",
-        "Date",
-        "Civil_Works",
-        "Recommendation",
-        "Comments",
-        "Challenges",
-        "Cabin_or_Underground_Cables",
-        "District",
-        "Personnel",
-        "Materials_and_equipment",
-        "Comments1",
-    ]
-    if filtered_rows:
-        # Normalize rows to expected length and create DataFrame
-        preview_rows = [row + [""] * (len(columns) - len(row)) for row in filtered_rows]
-        df_preview = pd.DataFrame(preview_rows, columns=columns)
-        st.dataframe(df_preview, use_container_width=True, hide_index=True)
-    else:
-        st.info("No reports match your selection. Please adjust your sites or dates.")
+
 
 # --- Image Uploads ---
 with st.expander("Step 4: Upload Images (Optional)", expanded=False):
@@ -190,19 +170,7 @@ if st.button("🚀 Generate & Download All Reports"):
                         with open(img2_path, "wb") as f:
                             f.write(image_files[1].getbuffer())
                         image2 = InlineImage(tpl, img2_path, width=Mm(70))
-                    context = {
-                        "Site_Name": site,
-                        "Date": date,
-                        "Civil_Works": civil_works,
-                        "Recommendation": general_rec,
-                        "Comments": comments,
-                        "Challenges": challenges,
-                        "Cabin_or_Underground_Cables": "",
-                        "District": "",
-                        "Personnel": "",
-                        "Materials_and_equipment": "",
-                        "Comments1": "",
-                    }
+
                     filename = f"SITE DAILY REPORT_{site}_{date.replace('/', '.')}.docx"
                     tpl.render(context)
                     out_path = os.path.join(temp_dir, filename)
