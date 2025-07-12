@@ -130,12 +130,17 @@ with st.expander("Step 3: Preview Reports to be Generated", expanded=True):
     if filtered_rows:
         # Preview using the new column order from the Google Sheet
         df_preview = pd.DataFrame(filtered_rows, columns=[
-            "Site Name",
-            "Date",
-            "Civil Works",
-            "General recommendation",
-            "Comments about the activities performed and challenges faced",
-            "Challenges",
+                        "Site_Name": site,
+                        "Date": date,
+                        "Civil_Works": civil_works,
+                        "Recommendation": general_rec,
+                        "Comments": comments,
+                        "Challenges": challenges,
+                        "Cabin_or_Underground_Cables": "",
+                        "District": "",
+                        "Personnel": "",
+                        "Materials_and_equipment": "",
+                        "Comments1": "",
         ])
         st.dataframe(df_preview, use_container_width=True, hide_index=True)
     else:
@@ -186,17 +191,17 @@ if st.button("🚀 Generate & Download All Reports"):
                             f.write(image_files[1].getbuffer())
                         image2 = InlineImage(tpl, img2_path, width=Mm(70))
                     context = {
-                        'Site Name': site,
-                        'Date': date,
-                        'Civil Works': civil_works,
-                        'General recommendation': general_rec,
-                        'Comments about the activities performed and challenges faced': comments,
-                        'Challenges': challenges,
-                        'Cabin  or Underground Cables': '',
-                        'District': '',
-                        'Personnel': '',
-                        'Materials and equipment': '',
-                        'Comments about observation on rules of HEALTH, SAFETY & ENVIRONMENT': '',
+                        "Site_Name": site,
+                        "Date": date,
+                        "Civil_Works": civil_works,
+                        "Recommendation": general_rec,
+                        "Comments": comments,
+                        "Challenges": challenges,
+                        "Cabin_or_Underground_Cables": "",
+                        "District": "",
+                        "Personnel": "",
+                        "Materials_and_equipment": "",
+                        "Comments1": "",
                     }
                     filename = f"SITE DAILY REPORT_{site}_{date.replace('/', '.')}.docx"
                     tpl.render(context)
