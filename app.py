@@ -13,7 +13,19 @@ import pandas as pd
 # --- CONFIG ---
 SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI'
 SHEET_NAME = 'Reports'
-CREDENTIALS_PATH = "credentials.json"
+
+import json
+from google.oauth2 import service_account
+
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+
+# Use Streamlit secrets for Google service account
+service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+creds = service_account.Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
+
+service = build('sheets', 'v4', credentials=creds)
+sheet = service.spreadsheets()
+
 TEMPLATE_PATH = "Site_Report_Template.docx"
 
 # --- Google Sheets API setup ---
@@ -122,4 +134,5 @@ if st.button("🚀 Generate & Download All Reports"):
 
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
+
 
