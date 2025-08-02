@@ -1,47 +1,35 @@
 import streamlit as st
+import json
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 import os
-import glob
-from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
 import tempfile
 import shutil
 import zipfile
 import pandas as pd
 
-# --- CONFIG ---
-SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI'
-SHEET_NAME = 'Reports'
-
-import json
-from google.oauth2 import service_account
-
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-
-# Use Streamlit secrets for Google service account
-service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-creds = service_account.Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
-
-service = build('sheets', 'v4', credentials=creds)
-sheet = service.spreadsheets()
-
-TEMPLATE_PATH = "Site_Report_Template.docx"
-
 # --- Google Sheets API setup ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+
+# Load Google credentials from Streamlit secrets
+service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+creds = service_account.Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
 service = build('sheets', 'v4', credentials=creds)
 sheet = service.spreadsheets()
+
+SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI'
+SHEET_NAME = 'Reports'
+TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
 
 def get_sheet_data():
     result = sheet.values().get(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A2:E500"
+        range=f"{SHEET_NAME}!A2:K500"
     ).execute()
     rows = result.get('values', [])
-    # Pad missing fields
-    padded_rows = [row + [""] * (5 - len(row)) for row in rows]
+    padded_rows = [row + [""] * (11 - len(row)) for row in rows]
     return padded_rows
 
 def get_unique_sites_and_dates(rows):
@@ -64,9 +52,8 @@ with st.sidebar:
     if "All Sites" in selected_sites:
         selected_sites = sites
 
-# --- UI: Date selection ---
+    # --- UI: Date selection ---
     st.header("Step 2: Select Dates")
-    # Filter available dates for the selected sites only
     site_dates = sorted(list(set(row[0].strip() for row in rows if row[1].strip() in selected_sites)))
     date_choices = ["All Dates"] + site_dates
     selected_dates = st.multiselect("Choose dates:", date_choices, default=["All Dates"])
@@ -78,23 +65,27 @@ filtered_rows = [row for row in rows if row[1].strip() in selected_sites and row
 
 # --- Preview Table ---
 st.subheader("Preview Reports to be Generated")
-df_preview = pd.DataFrame(filtered_rows, columns=["Date", "Site", "Civil Works", "Planning", "Challenges"])
+df_preview = pd.DataFrame(
+    filtered_rows,
+    columns=[
+        "Date", "Site_Name", "District", "Work", "Human_Resources", "Supply",
+        "Work_Executed", "Comment_on_work", "Another_Work_Executed",
+        "Comment_on_HSE", "Consultant_Recommandation"
+    ]
+)
 st.dataframe(df_preview, use_container_width=True, hide_index=True)
 
 # --- Image Uploads ---
 st.subheader("Step 3: Upload Images (Optional)")
-
 st.markdown("You may upload multiple images and assign them to a specific site/date. Images will be included in the corresponding report.")
 
-# Helper: Build site-date pairs for assignment
 site_date_pairs = sorted(set((row[1].strip(), row[0].strip()) for row in filtered_rows))
-
 uploaded_image_mapping = {}
 if len(site_date_pairs) > 0:
-    for idx, (site, date) in enumerate(site_date_pairs):
-        with st.expander(f"Upload Images for {site} ({date})"):
-            imgs = st.file_uploader(f"Images for {site} ({date})", accept_multiple_files=True, key=f"{site}_{date}")
-            uploaded_image_mapping[(site, date)] = imgs
+    for idx, (site_name, date) in enumerate(site_date_pairs):
+        with st.expander(f"Upload Images for {site_name} ({date})"):
+            imgs = st.file_uploader(f"Images for {site_name} ({date})", accept_multiple_files=True, key=f"{site_name}_{date}")
+            uploaded_image_mapping[(site_name, date)] = imgs
 
 # --- Generate Reports ---
 if st.button("🚀 Generate & Download All Reports"):
@@ -103,10 +94,13 @@ if st.button("🚀 Generate & Download All Reports"):
         zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
             for row in filtered_rows:
-                date, site, civil_works, planning, challenges = (row + [""] * 5)[:5]
+                (
+                    date, site_name, district, work, human_resources, supply,
+                    work_executed, comment_on_work, another_work_executed,
+                    comment_on_hse, consultant_recommandation
+                ) = (row + [""] * 11)[:11]
                 tpl = DocxTemplate(TEMPLATE_PATH)
-                # Attach images if uploaded for this site/date
-                image_files = uploaded_image_mapping.get((site, date), [])
+                image_files = uploaded_image_mapping.get((site_name, date), [])
                 images = []
                 for img_file in image_files:
                     img_path = os.path.join(temp_dir, img_file.name)
@@ -114,14 +108,20 @@ if st.button("🚀 Generate & Download All Reports"):
                         f.write(img_file.getbuffer())
                     images.append(InlineImage(tpl, img_path, width=Mm(70)))
                 context = {
-                    'SITE_NAME': site,
-                    'DATE': date,
-                    'CIVIL_WORKS': civil_works,
-                    'PLANNING': planning,
-                    'CHALLENGES': challenges,
-                    'ALL_IMAGES': images
+                    'Site_Name': site_name,
+                    'Date': date,
+                    'District': district,
+                    'Work': work,
+                    'Human_Resources': human_resources,
+                    'Supply': supply,
+                    'Work_Executed': work_executed,
+                    'Comment_on_work': comment_on_work,
+                    'Another_Work_Executed': another_work_executed,
+                    'Comment_on_HSE': comment_on_hse,
+                    'Consultant_Recommandation': consultant_recommandation,
+                    'Images': images
                 }
-                filename = f"SITE DAILY REPORT_{site}_{date.replace('/', '.')}.docx"
+                filename = f"SITE DAILY REPORT_{site_name}_{date.replace('/', '.')}.docx"
                 tpl.render(context)
                 out_path = os.path.join(temp_dir, filename)
                 tpl.save(out_path)
@@ -134,5 +134,3 @@ if st.button("🚀 Generate & Download All Reports"):
 
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
-
-
