@@ -124,30 +124,30 @@ st.title("📑 Site Daily Report Generator (Pro)")
 rows = get_sheet_data()
 sites, all_dates = get_unique_sites_and_dates(rows)
 
-# --- UI: Site selection ---
-with st.sidebar:
-    st.header("Step 1: Select Sites")
-    site_choices = ["All Sites"] + sites
-    selected_sites = st.multiselect("Choose sites:", site_choices, default=["All Sites"])
-    if "All Sites" in selected_sites:
-        selected_sites = sites
-# --- UI: Site selection ---
+# --- UI: Site/Date filters (Sidebar only) ---
 with st.sidebar:
     st.header("Step 0: Select Discipline")
-    discipline = st.radio("Choose discipline:", ["Civil", "Electrical"], index=0)
+    discipline = st.radio(
+        "Choose discipline:", ["Civil", "Electrical"], index=0, key="discipline_radio"
+    )
 
     st.header("Step 1: Select Sites")
     site_choices = ["All Sites"] + sites
-    selected_sites = st.multiselect("Choose sites:", site_choices, default=["All Sites"])
-    if "All Sites" in selected_sites:
+    selected_sites = st.multiselect(
+        "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
+    )
+    # If All Sites (or nothing) selected, use all sites
+    if "All Sites" in selected_sites or not selected_sites:
         selected_sites = sites
 
     # --- UI: Date selection ---
     st.header("Step 2: Select Dates")
-    site_dates = sorted(list(set(row[0].strip() for row in rows if row[1].strip() in selected_sites)))
+    site_dates = sorted({row[0].strip() for row in rows if row[1].strip() in selected_sites})
     date_choices = ["All Dates"] + site_dates
-    selected_dates = st.multiselect("Choose dates:", date_choices, default=["All Dates"])
-    if "All Dates" in selected_dates:
+    selected_dates = st.multiselect(
+        "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
+    )
+    if "All Dates" in selected_dates or not selected_dates:
         selected_dates = site_dates
 
 # --- Filter rows for preview ---
