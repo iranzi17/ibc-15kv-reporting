@@ -1,145 +1,150 @@
-import streamlit as st
-
-
-def _resolve_signature_path(candidate):
-    # Resolve signature image path with flexible extensions (.png, .jpg, .jpeg, .webp).
-    # Returns a valid existing file path or None.
-    if not candidate:
-        return None
-    import os
-    exts = [".png", ".jpg", ".jpeg", ".webp"]
-    # If path exists as-is, use it
-    if os.path.exists(candidate):
-        return candidate
-    base_dir, name = os.path.split(candidate)
-    stem, ext = os.path.splitext(name)
-    candidates = []
-    if ext:
-        # Try sibling extensions if provided ext doesn't exist
-        candidates.extend([os.path.join(base_dir or "signatures", stem + e) for e in exts])
-    else:
-        # No extension provided: assume signatures/<stem>.<ext> if no base_dir
-        if not base_dir:
-            base_dir = "signatures"
-        candidates.extend([os.path.join(base_dir, stem + e) for e in exts])
-    for c in candidates:
-        if os.path.exists(c):
-            return c
-    return None
-import json
-
-from google.oauth2 import service_account
-
-from googleapiclient.discovery import build
-
-from docxtpl import DocxTemplate, InlineImage
-
-from docx.shared import Mm
-
 import os
-
-import tempfile
-
-import shutil
-
-import zipfile
-
-import pandas as pd
-
-import streamlit as st
-
+import re
 import json
-
-from google.oauth2 import service_account
-
-from googleapiclient.discovery import build
-
-from docxtpl import DocxTemplate, InlineImage
-
-from docx.shared import Mm
-
-import os
-
 import tempfile
-
-import shutil
-
 import zipfile
-
-import pandas as pd
-
 from pathlib import Path
+
+import pandas as pd
+import streamlit as st
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm
+
+
+# -----------------------------
+# Paths & helpers
+# -----------------------------
 BASE_DIR = Path(__file__).parent.resolve()
 
-def resolve_asset(name: str | None):
-    """Find an image whether it's in ./, ./signatures/, with or without extension."""
+def resolve_asset(name: str | None) -> str | None:
+    """
+    Find an asset (e.g., signature image) whether it’s in ./ or ./signatures/,
+    with or without extension. Tries .png/.jpg/.jpeg/.webp.
+    Returns an absolute path or None.
+    """
     if not name:
         return None
-    import os
-    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]  # try these
-    stems = [name] if ("/" in name or "\\" in name) else [name, f"signatures/{name}"]
-    for stem in stems:
+
+    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
+
+    # If path has a directory, try as-is (plus sibling extensions)
+    p = (BASE_DIR / name).resolve()
+    stem = p.with_suffix("").name
+    lookup_dirs = [p.parent]
+
+    # If no directory provided, also try ./signatures and .
+    if p.parent == BASE_DIR:
+        lookup_dirs = [BASE_DIR / "signatures", BASE_DIR]
+
+    for d in lookup_dirs:
         for ext in exts:
-            p = (BASE_DIR / f"{stem}{ext}").resolve()
-            if p.exists():
-                return str(p)
+            candidate = (d / f"{stem}{ext}").resolve()
+            if candidate.exists():
+                return str(candidate)
     return None
 
-# --- Google Sheets API setup ---
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
-# Load Google credentials from Streamlit secrets
-service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-creds = service_account.Credentials.from_service_account_info(service_account_info, scopes=SCOPES)
-service = build('sheets', 'v4', credentials=creds)
-sheet = service.spreadsheets()
+def normalize_date(d) -> str:
+    """
+    Normalize date strings like '06/08/2025' to '2025-08-06'.
+    If parsing fails, just replace slashes with hyphens.
+    """
+    try:
+        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%Y-%m-%d")
+    except Exception:
+        return str(d).replace("/", "-").replace("\\", "-")
 
-SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI'
-SHEET_NAME = 'Reports'
+
+def safe_filename(s: str, max_len: int = 150) -> str:
+    """
+    Remove illegal filename characters and tidy whitespace.
+    """
+    s = str(s)
+    s = re.sub(r'[\\/:*?"<>|]+', "-", s)  # illegal on Windows + unsafe
+    s = re.sub(r"\s+", " ", s).strip(" .-")
+    return s[:max_len]
+
+
+# -----------------------------
+# Config & constants
+# -----------------------------
+st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
+
+SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
+SHEET_NAME = "Reports"
 TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
 
 SIGNATORIES = {
     "Civil": {
         "Consultant_Name": "IRANZI Prince Jean Claude",
         "Consultant_Title": "Civil Engineer",
-        "Consultant_Signature": "iranzi_prince_jean_claude",   # repo root
+        # keep stems; resolver will find .jpg/.png in repo root or ./signatures
+        "Consultant_Signature": "iranzi_prince_jean_claude",
         "Contractor_Name": "RUTALINDWA Olivier",
         "Contractor_Title": "Civil Engineer",
-        "Contractor_Signature": "rutalindwa_olivier",          # repo root
+        "Contractor_Signature": "rutalindwa_olivier",
     },
     "Electrical": {
         "Consultant_Name": "Alexis IVUGIZA",
         "Consultant_Title": "Electrical Engineer",
         "Consultant_Signature": "alexis_ivugiza",
-        "Contractor_Name": "Issac HABIMANA",  # tell me if you want Isaac
+        "Contractor_Name": "Issac HABIMANA",  # say if you want 'Isaac'
         "Contractor_Title": "Electrical Engineer",
         "Contractor_Signature": "issac_habimana",
     },
 }
 
+
+# -----------------------------
+# Google Sheets
+# -----------------------------
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+
 @st.cache_data(ttl=300)
-def get_sheet_data():
+def get_sheet_data() -> list[list[str]]:
+    # Load credentials from Streamlit secrets
+    try:
+        service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    except Exception as e:
+        st.error("Google credentials not found in st.secrets['GOOGLE_CREDENTIALS'].")
+        st.stop()
+
+    creds = service_account.Credentials.from_service_account_info(
+        service_account_info, scopes=SCOPES
+    )
+    service = build("sheets", "v4", credentials=creds)
+    sheet = service.spreadsheets()
+
     result = sheet.values().get(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A:K"
+        range=f"{SHEET_NAME}!A:K",  # open-ended range
     ).execute()
-    rows = result.get('values', [])
+    rows = result.get("values", [])
+    # pad rows to 11 columns to avoid index errors
     padded_rows = [row + [""] * (11 - len(row)) for row in rows]
     return padded_rows
 
-def get_unique_sites_and_dates(rows):
-    sites = sorted(list(set(row[1].strip() for row in rows if len(row) > 1)))
-    dates = sorted(list(set(row[0].strip() for row in rows if len(row) > 0)))
+
+def get_unique_sites_and_dates(rows: list[list[str]]):
+    sites = sorted({row[1].strip() for row in rows if len(row) > 1 and row[1].strip()})
+    dates = sorted({row[0].strip() for row in rows if len(row) > 0 and row[0].strip()})
     return sites, dates
 
-st.set_page_config(layout="wide")
+
+# -----------------------------
+# UI
+# -----------------------------
 st.title("📑 Site Daily Report Generator (Pro)")
 
-# --- Load data ---
 rows = get_sheet_data()
+if not rows:
+    st.warning("No data found in the Google Sheet.")
+    st.stop()
+
 sites, all_dates = get_unique_sites_and_dates(rows)
 
-# --- UI: Site/Date filters (Sidebar only) ---
 with st.sidebar:
     st.header("Step 0: Select Discipline")
     discipline = st.radio(
@@ -151,13 +156,13 @@ with st.sidebar:
     selected_sites = st.multiselect(
         "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
     )
-    # If All Sites (or nothing) selected, use all sites
     if "All Sites" in selected_sites or not selected_sites:
         selected_sites = sites
 
-    # --- UI: Date selection ---
     st.header("Step 2: Select Dates")
-    site_dates = sorted({row[0].strip() for row in rows if row[1].strip() in selected_sites})
+    site_dates = sorted(
+        {row[0].strip() for row in rows if row[1].strip() in selected_sites}
+    )
     date_choices = ["All Dates"] + site_dates
     selected_dates = st.multiselect(
         "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
@@ -165,107 +170,124 @@ with st.sidebar:
     if "All Dates" in selected_dates or not selected_dates:
         selected_dates = site_dates
 
-# --- Filter rows for preview ---
-filtered_rows = [row for row in rows if row[1].strip() in selected_sites and row[0].strip() in selected_dates]
 
-# Build unique (site, date) pairs for upload sections
+# Filtered rows
+filtered_rows = [
+    row for row in rows
+    if row[1].strip() in selected_sites and row[0].strip() in selected_dates
+]
+
+# (site, date) pairs for upload mapping
 site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
-# Hold uploaded images per (site, date)
-uploaded_image_mapping = {}
+# Uploads mapping
+uploaded_image_mapping: dict[tuple[str, str], list] = {}
 
-# --- Preview Table ---
+# Preview
 st.subheader("Preview Reports to be Generated")
 df_preview = pd.DataFrame(
     filtered_rows,
     columns=[
         "Date", "Site_Name", "District", "Work", "Human_Resources", "Supply",
         "Work_Executed", "Comment_on_work", "Another_Work_Executed",
-        "Comment_on_HSE", "Consultant_Recommandation"
-    ]
+        "Comment_on_HSE", "Consultant_Recommandation",
+    ],
 )
 st.dataframe(df_preview, use_container_width=True, hide_index=True)
 
-# --- Image Uploads ---
-if len(site_date_pairs) > 0:
-    for idx, (site_name, date) in enumerate(site_date_pairs):
+# Image uploads
+if site_date_pairs:
+    for site_name, date in site_date_pairs:
         with st.expander(f"Upload Images for {site_name} ({date})"):
             imgs = st.file_uploader(
-                f"Images for {site_name} ({date})", accept_multiple_files=True,
-                key=f"{site_name}_{date}"
+                f"Images for {site_name} ({date})",
+                accept_multiple_files=True,
+                key=f"uploader_{site_name}_{date}",
             )
             uploaded_image_mapping[(site_name, date)] = imgs
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
 
-# --- Generate Reports ---
+
+# -----------------------------
+# Generate reports
+# -----------------------------
 if st.button("🚀 Generate & Download All Reports"):
     with st.spinner("Generating reports, please wait..."):
         temp_dir = tempfile.mkdtemp()
         zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
 
-        with zipfile.ZipFile(zip_buffer, "w") as zipf:
-            for row in filtered_rows:
-                (
-                    date, site_name, district, work, human_resources, supply,
-                    work_executed, comment_on_work, another_work_executed,
-                    comment_on_hse, consultant_recommandation
-                ) = (row + [""] * 11)[:11]
+        try:
+            with zipfile.ZipFile(zip_buffer, "w") as zipf:
+                for row in filtered_rows:
+                    (
+                        date, site_name, district, work, human_resources, supply,
+                        work_executed, comment_on_work, another_work_executed,
+                        comment_on_hse, consultant_recommandation
+                    ) = (row + [""] * 11)[:11]
 
-                tpl = DocxTemplate(TEMPLATE_PATH)
+                    tpl = DocxTemplate(TEMPLATE_PATH)
 
-                # Images from uploader
-                image_files = uploaded_image_mapping.get((site_name, date), []) or []
-                from docxtpl import RichText
-                images_rt = RichText()
-                for img_file in image_files:
-                    img_path = os.path.join(temp_dir, img_file.name)
-                    with open(img_path, "wb") as f:
-                        f.write(img_file.getbuffer())
-                    images_rt.add(InlineImage(tpl, img_path, width=Mm(70)))
+                    # Images from uploader
+                    image_files = uploaded_image_mapping.get((site_name, date), []) or []
+                    from docxtpl import RichText
+                    images_rt = RichText()
+                    for img_file in image_files:
+                        img_path = os.path.join(temp_dir, img_file.name)
+                        with open(img_path, "wb") as f:
+                            f.write(img_file.getbuffer())
+                        images_rt.add(InlineImage(tpl, img_path, width=Mm(70)))
 
-                # Signatories (names/titles + signatures)
-                sign_info = SIGNATORIES.get(discipline, {})
-                cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
-                cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
-                cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-                cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+                    # Signatories (names/titles + signatures)
+                    sign_info = SIGNATORIES.get(discipline, {})
+                    cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+                    cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+                    cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+                    cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
 
-                # Context for DOCX
-                context = {
-                    'Site_Name': site_name or '',
-                    'Date': date or '',
-                    'District': district or '',
-                    'Work': work or '',
-                    'Human_Resources': human_resources or '',
-                    'Supply': supply or '',
-                    'Work_Executed': work_executed or '',
-                    'Comment_on_work': comment_on_work or '',
-                    'Another_Work_Executed': another_work_executed or '',
-                    'Comment_on_HSE': comment_on_hse or '',
-                    'Consultant_Recommandation': consultant_recommandation or '',
-                    'Images': images_rt,
-                    'Consultant_Name': sign_info.get('Consultant_Name', ''),
-                    'Consultant_Title': sign_info.get('Consultant_Title', ''),
-                    'Contractor_Name': sign_info.get('Contractor_Name', ''),
-                    'Contractor_Title': sign_info.get('Contractor_Title', ''),
-                    'Consultant_Signature': cons_sig_img,
-                    'Contractor_Signature': cont_sig_img,
-                }
+                    # Context for DOCX
+                    context = {
+                        "Site_Name": site_name or "",
+                        "Date": date or "",
+                        "District": district or "",
+                        "Work": work or "",
+                        "Human_Resources": human_resources or "",
+                        "Supply": supply or "",
+                        "Work_Executed": work_executed or "",
+                        "Comment_on_work": comment_on_work or "",
+                        "Another_Work_Executed": another_work_executed or "",
+                        "Comment_on_HSE": comment_on_hse or "",
+                        "Consultant_Recommandation": consultant_recommandation or "",
+                        "Images": images_rt,
+                        "Consultant_Name": sign_info.get("Consultant_Name", ""),
+                        "Consultant_Title": sign_info.get("Consultant_Title", ""),
+                        "Contractor_Name": sign_info.get("Contractor_Name", ""),
+                        "Contractor_Title": sign_info.get("Contractor_Title", ""),
+                        "Consultant_Signature": cons_sig_img,
+                        "Contractor_Signature": cont_sig_img,
+                    }
 
-                # <<< keep this line at the same indent as 'context' >>>
-                tpl.render(context)
+                    tpl.render(context)
 
-                out_name = f"{date} - {site_name}.docx"
-                out_path = os.path.join(temp_dir, out_name)
-                tpl.save(out_path)
-                zipf.write(out_path, arcname=out_name)
+                    # Safe filename (fixes slashes in date, etc.)
+                    safe_date = normalize_date(date)
+                    safe_site = safe_filename(site_name)
+                    out_name = safe_filename(f"{safe_date} - {safe_site}.docx")
+                    out_path = os.path.join(temp_dir, out_name)
 
-        zip_buffer.flush(); zip_buffer.seek(0)
-        st.download_button("⬇️ Download ZIP",
-                           data=zip_buffer.read(),
-                           file_name="daily_reports.zip",
-                           mime="application/zip")
+                    tpl.save(out_path)
+                    zipf.write(out_path, arcname=out_name)
+
+            zip_buffer.flush(); zip_buffer.seek(0)
+            st.download_button(
+                "⬇️ Download ZIP",
+                data=zip_buffer.read(),
+                file_name="daily_reports.zip",
+                mime="application/zip",
+            )
+        finally:
+            # Optional: clean temp_dir on next runs. Streamlit restarts often so OS will clean up.
+            pass
 
 
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
