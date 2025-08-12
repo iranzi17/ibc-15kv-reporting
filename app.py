@@ -203,6 +203,7 @@ if st.button("🚀 Generate & Download All Reports"):
     with st.spinner("Generating reports, please wait..."):
         temp_dir = tempfile.mkdtemp()
         zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
             for row in filtered_rows:
                 (
@@ -210,8 +211,11 @@ if st.button("🚀 Generate & Download All Reports"):
                     work_executed, comment_on_work, another_work_executed,
                     comment_on_hse, consultant_recommandation
                 ) = (row + [""] * 11)[:11]
+
                 tpl = DocxTemplate(TEMPLATE_PATH)
-                image_files = uploaded_image_mapping.get((site_name, date), [])
+
+                # Images from uploader
+                image_files = uploaded_image_mapping.get((site_name, date), []) or []
                 from docxtpl import RichText
                 images_rt = RichText()
                 for img_file in image_files:
@@ -219,11 +223,15 @@ if st.button("🚀 Generate & Download All Reports"):
                     with open(img_path, "wb") as f:
                         f.write(img_file.getbuffer())
                     images_rt.add(InlineImage(tpl, img_path, width=Mm(70)))
-                
-                # Build signatory info (safe defaults)
-                sign_info = SIGNATORIES.get(discipline, {})
 
-                # Final context for the DOCX template (keys match placeholders)
+                # Signatories (names/titles + signatures)
+                sign_info = SIGNATORIES.get(discipline, {})
+                cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+                cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+                cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+                cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+
+                # Context for DOCX
                 context = {
                     'Site_Name': site_name or '',
                     'Date': date or '',
@@ -237,46 +245,28 @@ if st.button("🚀 Generate & Download All Reports"):
                     'Comment_on_HSE': comment_on_hse or '',
                     'Consultant_Recommandation': consultant_recommandation or '',
                     'Images': images_rt,
-                    # Optional placeholders (add to template if you want signatures and names printed)
                     'Consultant_Name': sign_info.get('Consultant_Name', ''),
-                    'Contractor_Name': sign_info.get('Contractor_Name', ''),
                     'Consultant_Title': sign_info.get('Consultant_Title', ''),
+                    'Contractor_Name': sign_info.get('Contractor_Name', ''),
                     'Contractor_Title': sign_info.get('Contractor_Title', ''),
-                    'Consultant_Signature': InlineImage(tpl, _resolve_signature_path(sign_info.get('Consultant_Signature')), width=Mm(30)) if _resolve_signature_path(sign_info.get('Consultant_Signature')) else None,
-                    'Contractor_Signature': InlineImage(tpl, _resolve_signature_path(sign_info.get('Contractor_Signature')), width=Mm(30)) if _resolve_signature_path(sign_info.get('Contractor_Signature')) else None,
+                    'Consultant_Signature': cons_sig_img,
+                    'Contractor_Signature': cont_sig_img,
                 }
-                filename = f"SITE DAILY REPORT_{site_name}_{date.replace('/', '.')}.docx"
 
-                sign_info = SIGNATORIES.get(discipline, {})
-
-cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
-cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
-
-cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
-
-context = {
-    # ... other fields ...
-    "Consultant_Name": sign_info.get("Consultant_Name", ""),
-    "Consultant_Title": sign_info.get("Consultant_Title", ""),
-    "Contractor_Name": sign_info.get("Contractor_Name", ""),
-    "Contractor_Title": sign_info.get("Contractor_Title", ""),
-    "Consultant_Signature": cons_sig_img,
-    "Contractor_Signature": cont_sig_img,
-}
-
-tpl.render(context)
-
-                
+                # <<< keep this line at the same indent as 'context' >>>
                 tpl.render(context)
-                out_path = os.path.join(temp_dir, filename)
+
+                out_name = f"{date} - {site_name}.docx"
+                out_path = os.path.join(temp_dir, out_name)
                 tpl.save(out_path)
-                zipf.write(out_path, arcname=filename)
-        st.success("All reports generated successfully!")
-        with open(zip_buffer.name, "rb") as f:
-            st.download_button("⬇️ Download All Reports (ZIP)", data=f, file_name="reports.zip")
-        shutil.rmtree(temp_dir)
-        os.remove(zip_buffer.name)
+                zipf.write(out_path, arcname=out_name)
+
+        zip_buffer.flush(); zip_buffer.seek(0)
+        st.download_button("⬇️ Download ZIP",
+                           data=zip_buffer.read(),
+                           file_name="daily_reports.zip",
+                           mime="application/zip")
+
 
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
