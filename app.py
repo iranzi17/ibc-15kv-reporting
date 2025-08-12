@@ -45,6 +45,14 @@ def resolve_asset(name: str | None) -> str | None:
                 return str(candidate)
     return None
 
+def format_date_title(d: str) -> str:
+    """Return dd.MM.YYYY for filenames like 04.08.2025."""
+    try:
+        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%d.%m.%Y")
+    except Exception:
+        # Fallback: normalize common separators to dots
+        return str(d).replace("/", ".").replace("-", ".")
+
 
 def normalize_date(d) -> str:
     """
@@ -269,14 +277,14 @@ if st.button("🚀 Generate & Download All Reports"):
 
                     tpl.render(context)
 
-                    # Safe filename (fixes slashes in date, etc.)
-                    safe_date = normalize_date(date)
-                    safe_site = safe_filename(site_name)
-                    out_name = safe_filename(f"{safe_date} - {safe_site}.docx")
-                    out_path = os.path.join(temp_dir, out_name)
+                    # Title pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
+date_for_title = format_date_title(date)
+out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
+out_name = safe_filename(out_name)  # guard against illegal chars/length
+out_path = os.path.join(temp_dir, out_name)
 
-                    tpl.save(out_path)
-                    zipf.write(out_path, arcname=out_name)
+tpl.save(out_path)
+zipf.write(out_path, arcname=out_name)
 
             zip_buffer.flush(); zip_buffer.seek(0)
             st.download_button(
