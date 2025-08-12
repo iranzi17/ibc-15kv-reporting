@@ -68,6 +68,22 @@ import zipfile
 
 import pandas as pd
 
+from pathlib import Path
+BASE_DIR = Path(__file__).parent.resolve()
+
+def resolve_asset(name: str | None):
+    """Find an image whether it's in ./, ./signatures/, with or without extension."""
+    if not name:
+        return None
+    import os
+    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]  # try these
+    stems = [name] if ("/" in name or "\\" in name) else [name, f"signatures/{name}"]
+    for stem in stems:
+        for ext in exts:
+            p = (BASE_DIR / f"{stem}{ext}").resolve()
+            if p.exists():
+                return str(p)
+    return None
 
 # --- Google Sheets API setup ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
@@ -85,19 +101,19 @@ TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
 SIGNATORIES = {
     "Civil": {
         "Consultant_Name": "IRANZI Prince Jean Claude",
-        "Consultant_Title": "Civil Engineer",   # or "Junior Civil Engineer" if you prefer
-        "Consultant_Signature": os.path.join("signatures", "iranzi_prince_jean_claude"),  # no ext needed
+        "Consultant_Title": "Civil Engineer",
+        "Consultant_Signature": "iranzi_prince_jean_claude",   # repo root
         "Contractor_Name": "RUTALINDWA Olivier",
         "Contractor_Title": "Civil Engineer",
-        "Contractor_Signature": os.path.join("signatures", "rutalindwa_olivier"),         # no ext needed
+        "Contractor_Signature": "rutalindwa_olivier",          # repo root
     },
     "Electrical": {
         "Consultant_Name": "Alexis IVUGIZA",
         "Consultant_Title": "Electrical Engineer",
-        "Consultant_Signature": os.path.join("signatures", "alexis_ivugiza"),
-        "Contractor_Name": "Issac HABIMANA",   # tell me if you want 'Isaac'
+        "Consultant_Signature": "alexis_ivugiza",
+        "Contractor_Name": "Issac HABIMANA",  # tell me if you want Isaac
         "Contractor_Title": "Electrical Engineer",
-        "Contractor_Signature": os.path.join("signatures", "issac_habimana"),
+        "Contractor_Signature": "issac_habimana",
     },
 }
 
@@ -230,6 +246,28 @@ if st.button("🚀 Generate & Download All Reports"):
                     'Contractor_Signature': InlineImage(tpl, _resolve_signature_path(sign_info.get('Contractor_Signature')), width=Mm(30)) if _resolve_signature_path(sign_info.get('Contractor_Signature')) else None,
                 }
                 filename = f"SITE DAILY REPORT_{site_name}_{date.replace('/', '.')}.docx"
+
+                sign_info = SIGNATORIES.get(discipline, {})
+
+cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+
+cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+
+context = {
+    # ... other fields ...
+    "Consultant_Name": sign_info.get("Consultant_Name", ""),
+    "Consultant_Title": sign_info.get("Consultant_Title", ""),
+    "Contractor_Name": sign_info.get("Contractor_Name", ""),
+    "Contractor_Title": sign_info.get("Contractor_Title", ""),
+    "Consultant_Signature": cons_sig_img,
+    "Contractor_Signature": cont_sig_img,
+}
+
+tpl.render(context)
+
+                
                 tpl.render(context)
                 out_path = os.path.join(temp_dir, filename)
                 tpl.save(out_path)
