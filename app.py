@@ -4,21 +4,21 @@ import json
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from docxtpl import DocxTemplate, InlineImage
+from docxtpl import DocxTemplate, InlineImage, RichText
 from docx.shared import Mm
 
-
 # -----------------------------
-# Paths & helpers
+# Paths & small helpers
 # -----------------------------
 BASE_DIR = Path(__file__).parent.resolve()
 
-def resolve_asset(name: str | None) -> str | None:
+def resolve_asset(name: Optional[str]) -> Optional[str]:
     """
     Find an asset (e.g., signature image) whether it’s in ./ or ./signatures/,
     with or without extension. Tries .png/.jpg/.jpeg/.webp.
@@ -27,23 +27,31 @@ def resolve_asset(name: str | None) -> str | None:
     if not name:
         return None
 
-    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
-
-    # If path has a directory, try as-is (plus sibling extensions)
     p = (BASE_DIR / name).resolve()
     stem = p.with_suffix("").name
-    lookup_dirs = [p.parent]
 
-    # If no directory provided, also try ./signatures and .
-    if p.parent == BASE_DIR:
-        lookup_dirs = [BASE_DIR / "signatures", BASE_DIR]
+    # Where to look
+    if p.parent != BASE_DIR:
+        search_dirs = [p.parent]
+    else:
+        search_dirs = [BASE_DIR / "signatures", BASE_DIR]
 
-    for d in lookup_dirs:
+    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
+    for d in search_dirs:
         for ext in exts:
             candidate = (d / f"{stem}{ext}").resolve()
             if candidate.exists():
                 return str(candidate)
     return None
+
+
+def normalize_date(d) -> str:
+    """Normalize date like '06/08/2025' -> '2025-08-06' (safe for logs etc.)."""
+    try:
+        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%Y-%m-%d")
+    except Exception:
+        return str(d).replace("/", "-").replace("\\", "-")
+
 
 def format_date_title(d: str) -> str:
     """Return dd.MM.YYYY for filenames like 04.08.2025."""
@@ -54,29 +62,15 @@ def format_date_title(d: str) -> str:
         return str(d).replace("/", ".").replace("-", ".")
 
 
-def normalize_date(d) -> str:
-    """
-    Normalize date strings like '06/08/2025' to '2025-08-06'.
-    If parsing fails, just replace slashes with hyphens.
-    """
-    try:
-        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%Y-%m-%d")
-    except Exception:
-        return str(d).replace("/", "-").replace("\\", "-")
-
-
 def safe_filename(s: str, max_len: int = 150) -> str:
-    """
-    Remove illegal filename characters and tidy whitespace.
-    """
+    """Remove illegal filename characters and tidy whitespace."""
     s = str(s)
-    s = re.sub(r'[\\/:*?"<>|]+', "-", s)  # illegal on Windows + unsafe
+    s = re.sub(r'[\\/:*?"<>|]+', "-", s)  # illegal on Windows + unsafe elsewhere
     s = re.sub(r"\s+", " ", s).strip(" .-")
     return s[:max_len]
 
-
 # -----------------------------
-# Config & constants
+# App config & constants
 # -----------------------------
 st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
 
@@ -88,7 +82,7 @@ SIGNATORIES = {
     "Civil": {
         "Consultant_Name": "IRANZI Prince Jean Claude",
         "Consultant_Title": "Civil Engineer",
-        # keep stems; resolver will find .jpg/.png in repo root or ./signatures
+        # Keep stems; resolver will find .jpg/.png in repo root or ./signatures
         "Consultant_Signature": "iranzi_prince_jean_claude",
         "Contractor_Name": "RUTALINDWA Olivier",
         "Contractor_Title": "Civil Engineer",
@@ -104,7 +98,6 @@ SIGNATORIES = {
     },
 }
 
-
 # -----------------------------
 # Google Sheets
 # -----------------------------
@@ -113,12 +106,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 @st.cache_data(ttl=300)
 def get_sheet_data() -> list[list[str]]:
     # Load credentials from Streamlit secrets
-    try:
-        service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    except Exception as e:
-        st.error("Google credentials not found in st.secrets['GOOGLE_CREDENTIALS'].")
-        st.stop()
-
+    service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
     creds = service_account.Credentials.from_service_account_info(
         service_account_info, scopes=SCOPES
     )
@@ -139,7 +127,6 @@ def get_unique_sites_and_dates(rows: list[list[str]]):
     sites = sorted({row[1].strip() for row in rows if len(row) > 1 and row[1].strip()})
     dates = sorted({row[0].strip() for row in rows if len(row) > 0 and row[0].strip()})
     return sites, dates
-
 
 # -----------------------------
 # UI
@@ -168,16 +155,13 @@ with st.sidebar:
         selected_sites = sites
 
     st.header("Step 2: Select Dates")
-    site_dates = sorted(
-        {row[0].strip() for row in rows if row[1].strip() in selected_sites}
-    )
+    site_dates = sorted({row[0].strip() for row in rows if row[1].strip() in selected_sites})
     date_choices = ["All Dates"] + site_dates
     selected_dates = st.multiselect(
         "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
     )
     if "All Dates" in selected_dates or not selected_dates:
         selected_dates = site_dates
-
 
 # Filtered rows
 filtered_rows = [
@@ -216,7 +200,6 @@ if site_date_pairs:
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
 
-
 # -----------------------------
 # Generate reports
 # -----------------------------
@@ -225,78 +208,73 @@ if st.button("🚀 Generate & Download All Reports"):
         temp_dir = tempfile.mkdtemp()
         zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
 
-        try:
-            with zipfile.ZipFile(zip_buffer, "w") as zipf:
-                for row in filtered_rows:
-                    (
-                        date, site_name, district, work, human_resources, supply,
-                        work_executed, comment_on_work, another_work_executed,
-                        comment_on_hse, consultant_recommandation
-                    ) = (row + [""] * 11)[:11]
+        with zipfile.ZipFile(zip_buffer, "w") as zipf:
+            for row in filtered_rows:
+                (
+                    date, site_name, district, work, human_resources, supply,
+                    work_executed, comment_on_work, another_work_executed,
+                    comment_on_hse, consultant_recommandation
+                ) = (row + [""] * 11)[:11]
 
-                    tpl = DocxTemplate(TEMPLATE_PATH)
+                tpl = DocxTemplate(TEMPLATE_PATH)
 
-                    # Images from uploader
-                    image_files = uploaded_image_mapping.get((site_name, date), []) or []
-                    from docxtpl import RichText
-                    images_rt = RichText()
-                    for img_file in image_files:
-                        img_path = os.path.join(temp_dir, img_file.name)
-                        with open(img_path, "wb") as f:
-                            f.write(img_file.getbuffer())
-                        images_rt.add(InlineImage(tpl, img_path, width=Mm(70)))
+                # Images from uploader
+                image_files = uploaded_image_mapping.get((site_name, date), []) or []
+                images_rt = RichText()
+                for img_file in image_files:
+                    img_path = os.path.join(temp_dir, img_file.name)
+                    with open(img_path, "wb") as f:
+                        f.write(img_file.getbuffer())
+                    images_rt.add(InlineImage(tpl, img_path, width=Mm(70)))
 
-                    # Signatories (names/titles + signatures)
-                    sign_info = SIGNATORIES.get(discipline, {})
-                    cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
-                    cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
-                    cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-                    cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+                # Signatories (names/titles + signatures)
+                sign_info = SIGNATORIES.get(discipline, {})
+                cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+                cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+                cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+                cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
 
-                    # Context for DOCX
-                    context = {
-                        "Site_Name": site_name or "",
-                        "Date": date or "",
-                        "District": district or "",
-                        "Work": work or "",
-                        "Human_Resources": human_resources or "",
-                        "Supply": supply or "",
-                        "Work_Executed": work_executed or "",
-                        "Comment_on_work": comment_on_work or "",
-                        "Another_Work_Executed": another_work_executed or "",
-                        "Comment_on_HSE": comment_on_hse or "",
-                        "Consultant_Recommandation": consultant_recommandation or "",
-                        "Images": images_rt,
-                        "Consultant_Name": sign_info.get("Consultant_Name", ""),
-                        "Consultant_Title": sign_info.get("Consultant_Title", ""),
-                        "Contractor_Name": sign_info.get("Contractor_Name", ""),
-                        "Contractor_Title": sign_info.get("Contractor_Title", ""),
-                        "Consultant_Signature": cons_sig_img,
-                        "Contractor_Signature": cont_sig_img,
-                    }
+                # Context for DOCX
+                context = {
+                    "Site_Name": site_name or "",
+                    "Date": date or "",
+                    "District": district or "",
+                    "Work": work or "",
+                    "Human_Resources": human_resources or "",
+                    "Supply": supply or "",
+                    "Work_Executed": work_executed or "",
+                    "Comment_on_work": comment_on_work or "",
+                    "Another_Work_Executed": another_work_executed or "",
+                    "Comment_on_HSE": comment_on_hse or "",
+                    "Consultant_Recommandation": consultant_recommandation or "",
+                    "Images": images_rt,
+                    "Consultant_Name": sign_info.get("Consultant_Name", ""),
+                    "Consultant_Title": sign_info.get("Consultant_Title", ""),
+                    "Contractor_Name": sign_info.get("Contractor_Name", ""),
+                    "Contractor_Title": sign_info.get("Contractor_Title", ""),
+                    "Consultant_Signature": cons_sig_img,
+                    "Contractor_Signature": cont_sig_img,
+                }
 
-                    tpl.render(context)
+                tpl.render(context)
 
-                    # Title pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
-date_for_title = format_date_title(date)
-out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
-out_name = safe_filename(out_name)  # guard against illegal chars/length
-out_path = os.path.join(temp_dir, out_name)
+                # Filename pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
+                date_for_title = format_date_title(date)
+                out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
+                out_name = safe_filename(out_name)
+                out_path = os.path.join(temp_dir, out_name)
 
-tpl.save(out_path)
-zipf.write(out_path, arcname=out_name)
+                tpl.save(out_path)
+                zipf.write(out_path, arcname=out_name)
 
-            zip_buffer.flush(); zip_buffer.seek(0)
-            st.download_button(
-                "⬇️ Download ZIP",
-                data=zip_buffer.read(),
-                file_name="daily_reports.zip",
-                mime="application/zip",
-            )
-        finally:
-            # Optional: clean temp_dir on next runs. Streamlit restarts often so OS will clean up.
-            pass
-
+        zip_buffer.flush()
+        zip_buffer.seek(0)
+        st.download_button(
+            "⬇️ Download ZIP",
+            data=zip_buffer.read(),
+            file_name="daily_reports.zip",
+            mime="application/zip",
+        )
 
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
