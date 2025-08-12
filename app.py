@@ -82,21 +82,20 @@ SHEET_ID = '1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI'
 SHEET_NAME = 'Reports'
 TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
 
-# --- Signatory metadata ---
 SIGNATORIES = {
-     "Civil": {
-        "Consultant_Name": "Civil Consultant",
-        "Consultant_Title": "Civil Engineer",
-        "Consultant_Signature": os.path.join("signatures", "civil_consultant.png"),
-        "Contractor_Name": "Civil Contractor",
+    "Civil": {
+        "Consultant_Name": "IRANZI Prince Jean Claude",
+        "Consultant_Title": "Civil Engineer",   # or "Junior Civil Engineer" if you prefer
+        "Consultant_Signature": os.path.join("signatures", "iranzi_prince_jean_claude"),  # no ext needed
+        "Contractor_Name": "RUTALINDWA Olivier",
         "Contractor_Title": "Civil Engineer",
-        "Contractor_Signature": os.path.join("signatures", "civil_contractor.png"),
+        "Contractor_Signature": os.path.join("signatures", "rutalindwa_olivier"),         # no ext needed
     },
-        "Electrical": {
+    "Electrical": {
         "Consultant_Name": "Alexis IVUGIZA",
         "Consultant_Title": "Electrical Engineer",
         "Consultant_Signature": os.path.join("signatures", "alexis_ivugiza"),
-        "Contractor_Name": "Issac HABIMANA",
+        "Contractor_Name": "Issac HABIMANA",   # tell me if you want 'Isaac'
         "Contractor_Title": "Electrical Engineer",
         "Contractor_Signature": os.path.join("signatures", "issac_habimana"),
     },
