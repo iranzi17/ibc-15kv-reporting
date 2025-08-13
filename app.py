@@ -218,16 +218,16 @@ if st.button("🚀 Generate & Download All Reports"):
 
                 tpl = DocxTemplate(TEMPLATE_PATH)
 
-                # Images from uploader → build a subdocument so {{ Images }} works without a Jinja loop
-image_files = uploaded_image_mapping.get((site_name, date), []) or []
-images_subdoc = tpl.new_subdoc()
-for img_file in image_files:
-    img_path = os.path.join(temp_dir, img_file.name)
-    with open(img_path, "wb") as f:
-        f.write(img_file.getbuffer())
-    p = images_subdoc.add_paragraph()
-    r = p.add_run()
-    r.add_picture(img_path, width=Mm(70))
+                # Images from uploader → put each photo in a subdocument paragraph
+                image_files = uploaded_image_mapping.get((site_name, date), []) or []
+                images_subdoc = tpl.new_subdoc()
+                for img_file in image_files:
+                    img_path = os.path.join(temp_dir, img_file.name)
+                    with open(img_path, "wb") as f:
+                        f.write(img_file.getbuffer())
+                    p = images_subdoc.add_paragraph()
+                    r = p.add_run()
+                    r.add_picture(img_path, width=Mm(70))
 
                 # Signatories (names/titles + signatures)
                 sign_info = SIGNATORIES.get(discipline, {})
@@ -249,7 +249,7 @@ for img_file in image_files:
                     "Another_Work_Executed": another_work_executed or "",
                     "Comment_on_HSE": comment_on_hse or "",
                     "Consultant_Recommandation": consultant_recommandation or "",
-                    "Images": images_rt,
+                    "Images": images_subdoc,  # ← use subdocument, not RichText
                     "Consultant_Name": sign_info.get("Consultant_Name", ""),
                     "Consultant_Title": sign_info.get("Consultant_Title", ""),
                     "Contractor_Name": sign_info.get("Contractor_Name", ""),
@@ -263,7 +263,7 @@ for img_file in image_files:
                 # Filename pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
                 date_for_title = format_date_title(date)
                 out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
-                out_name = safe_filename(out_name)
+                out_name = safe_filename(out_name)  # guard against illegal chars/length
                 out_path = os.path.join(temp_dir, out_name)
 
                 tpl.save(out_path)
