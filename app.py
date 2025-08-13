@@ -475,7 +475,7 @@ st.caption("Made for efficient, multi-site daily reporting. Feedback & customiza
 # Weekly report
 # -----------------------------
 
-tpl, ctx = build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_image_mapping)
+
 tpl.render(ctx)
 fname = f"Electrical_Weekly_Report_Week_{ctx['Week_No']}_{ctx['Period_From'].replace('/','.')}_{ctx['Period_To'].replace('/','.')}.docx"
 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
