@@ -324,7 +324,9 @@ def build_site_table(rows_this_site):
     # rows_this_site: list of daily rows for one site (your padded schema)
     agg = {}  # (desc,unit) -> [Mon..Sun]
     for r in rows_this_site:
-        d = pd.to_datetime(r[0], dayfirst=True, errors='coerce'); if d is pd.NaT: continue
+        d = pd.to_datetime(r[0], dayfirst=True, errors='coerce'); 
+        if d is pd.NaT: 
+            continue
         dayi = monsun_index(d)
         texts = " ; ".join([(r[6] or ""), (r[8] or "")])  # Work_Executed + Another_Work_Executed
         for desc, unit, qty in activities_from_text(texts):
