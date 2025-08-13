@@ -304,34 +304,128 @@ st.caption("Made for efficient, multi-site daily reporting. Feedback & customiza
 # -----------------------------
 # Weekly report
 # -----------------------------
-st.subheader("Weekly Report")
-uploaded_reports = st.file_uploader(
-    "Upload daily reports", type="docx", accept_multiple_files=True
-)
-if st.button("Generate Weekly Report") and uploaded_reports:
-    buffer = merge_daily_reports(uploaded_reports)
 
-    dates = []
-    for f in uploaded_reports:
-        match = re.search(r"(\d{2}[.\-/]\d{2}[.\-/]\d{4})", f.name)
-        if match:
-            try:
-                dates.append(
-                    pd.to_datetime(match.group(1), dayfirst=True, errors="raise")
-                )
-            except Exception:
-                pass
-    if dates:
-        dates.sort()
-        start = dates[0].strftime("%Y-%m-%d")
-        end = dates[-1].strftime("%Y-%m-%d")
-    else:
-        start = "start"
-        end = "end"
+ACT_RE = re.compile(r'(?P<desc>[A-Za-z /&-]+)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>m|mt|nos|poles?)\b', re.I)
 
-    st.download_button(
-        "Download Weekly Report",
-        data=buffer.getvalue(),
-        file_name=f"weekly_report_{start}_{end}.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
+def activities_from_text(txt: str):
+    out = []
+    for m in ACT_RE.finditer(txt or ""):
+        desc = m.group('desc').strip().title()
+        qty = float(m.group('qty'))
+        unit = m.group('unit').lower().replace('poles', 'Nos').replace('pole', 'Nos')
+        unit = {'m':'mt', 'nos':'Nos', 'mt':'mt'}.get(unit, unit)
+        out.append((desc, unit, qty))
+    return out
+
+def monsun_index(ts):  # 0..6
+    return int(pd.to_datetime(ts).weekday())
+
+def build_site_table(rows_this_site):
+    # rows_this_site: list of daily rows for one site (your padded schema)
+    agg = {}  # (desc,unit) -> [Mon..Sun]
+    for r in rows_this_site:
+        d = pd.to_datetime(r[0], dayfirst=True, errors='coerce'); if d is pd.NaT: continue
+        dayi = monsun_index(d)
+        texts = " ; ".join([(r[6] or ""), (r[8] or "")])  # Work_Executed + Another_Work_Executed
+        for desc, unit, qty in activities_from_text(texts):
+            key = (desc, unit)
+            agg.setdefault(key, [0,0,0,0,0,0,0])[dayi] += qty
+    table = []
+    for (desc,unit), days in agg.items():
+        table.append({
+          "Description": desc, "Unit": unit,
+          "Mon":days[0],"Tue":days[1],"Wed":days[2],"Thu":days[3],
+          "Fri":days[4],"Sat":days[5],"Sun":days[6],
+          "Total": sum(days)
+        })
+    # stable order: by description then unit
+    table.sort(key=lambda x: (x["Description"], x["Unit"]))
+    return table
+
+def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
+    start = pd.to_datetime(start_ymd); end = pd.to_datetime(end_ymd)
+    sub = tpl.new_subdoc()
+    for (s, dstr), files in uploaded_map.items():
+        if s != site: continue
+        d = pd.to_datetime(dstr, dayfirst=True, errors="coerce")
+        if d is pd.NaT or not (start <= d <= end): continue
+        for f in files or []:
+            with tempfile.NamedTemporaryFile(delete=False) as t:
+                t.write(f.getbuffer()); t.flush()
+                p = sub.add_paragraph(); r = p.add_run()
+                r.add_picture(t.name, width=Mm(70))
+    return sub
+
+def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_map):
+    start = pd.to_datetime(start_ymd); end = pd.to_datetime(end_ymd)
+    week_no = int(start.isocalendar().week)
+    # filter into week
+    by_site = {}
+    for r in rows:
+        if r[1].strip() not in selected_sites: continue
+        d = pd.to_datetime(r[0], dayfirst=True, errors="coerce")
+        if d is pd.NaT or not (start <= d <= end): continue
+        by_site.setdefault(r[1].strip(), []).append(r)
+
+    tpl = DocxTemplate("Weekly_Report_Template.docx")
+
+    sites_ctx, total_man, good_lines, bad_lines = [], 0, [], []
+    for site, site_rows in sorted(by_site.items()):
+        # table
+        table = build_site_table(site_rows)
+        # narrative (simple starter)
+        act_lead = ", ".join({t["Description"] for t in table} or [])
+        narrative = f"During the week, electrical works progressed at {site}. Main activities included {act_lead.lower()}."
+        # challenges (heuristic from comments)
+        challenges=[]
+        for r in site_rows:
+            comm = (r[7] or "") + " " + (r[10] or "")
+            if any(k in comm.lower() for k in ["waiting", "damage", "approval", "lv line", "stoppage", "blocked"]):
+                challenges.append({"Issue": comm.strip(), "Impact": "Schedule impact"})
+        # pictures
+        pics = site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd)
+
+        # manpower sum (coerce numbers)
+        site_man = sum(int(re.search(r"\d+", str(r[4]) or "")[0]) for r in site_rows if re.search(r"\d+", str(r[4]) or ""))
+        total_man += site_man
+
+        sites_ctx.append({
+            "Site_Name": site,
+            "Narrative": narrative,
+            "Table": table,
+            "Challenges": challenges[:3],
+            "Pictures": pics
+        })
+
+        # collect lines for summary
+        good_lines.extend([r["Description"] for r in table][:3])
+        bad_lines.extend([c["Issue"] for c in challenges][:3])
+
+    # summary text (starter you can tune)
+    summary = f"This week, the {discipline.lower()} teams made progress across {len(sites_ctx)} sites, " \
+              f"with key activities: {', '.join(sorted(set(good_lines)))}."
+    if bad_lines:
+        summary += " Delays/risks noted: " + "; ".join(sorted(set(bad_lines))) + "."
+
+    # signatures
+    sign = SIGNATORIES.get(discipline, {})
+    cons_sig_path = resolve_asset(sign.get("Consultant_Signature"))
+    cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+
+    return tpl, {
+        "Week_No": f"{week_no:02d}",
+        "Period_From": start.strftime("%d/%m/%Y"),
+        "Period_To":   end.strftime("%d/%m/%Y"),
+        "Doc_No": f"{week_no:02d}",
+        "Doc_Date": pd.Timestamp.today().strftime("%d/%m/%Y"),
+        "Project_Name": "Consultancy services related to Supervision of Engineering Design Supply and Installation of 15kV Switching Substations and Rehabilitation of Associated Distribution Lines in Kigali",
+        "Prepared_By": SIGNATORIES.get(discipline, {}).get("Consultant_Name", ""),
+        "Prepared_Signature": cons_sig_img,
+        "Discipline": discipline,
+        "Summary": summary,
+        "Sites": sites_ctx,
+        "Ongoing": [],   # you can fill from a 'Weekly_Log' sheet
+        "Planned": [],   # idem
+        "HSE": "Teams maintained good safety standards this week.",
+        "Weekly_Images": tpl.new_subdoc(),  # or a global gallery like weekly_images_subdoc(...)
+    }
