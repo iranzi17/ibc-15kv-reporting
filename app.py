@@ -5,6 +5,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from typing import Optional
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
@@ -12,6 +13,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
+from docx import Document
 
 # -----------------------------
 # Paths & small helpers
@@ -68,6 +70,24 @@ def safe_filename(s: str, max_len: int = 150) -> str:
     s = re.sub(r'[\\/:*?"<>|]+', "-", s)  # illegal on Windows + unsafe elsewhere
     s = re.sub(r"\s+", " ", s).strip(" .-")
     return s[:max_len]
+
+
+def merge_daily_reports(files):
+    """Merge multiple daily report DOCX files into a single document with page breaks."""
+    if not files:
+        return None
+
+    merged_doc = Document(BytesIO(files[0].getvalue()))
+    for f in files[1:]:
+        doc = Document(BytesIO(f.getvalue()))
+        merged_doc.add_page_break()
+        for element in doc.element.body:
+            merged_doc.element.body.append(element)
+
+    output = BytesIO()
+    merged_doc.save(output)
+    output.seek(0)
+    return output
 
 # -----------------------------
 # App config & constants
@@ -280,3 +300,38 @@ if st.button("🚀 Generate & Download All Reports"):
 
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
+
+# -----------------------------
+# Weekly report
+# -----------------------------
+st.subheader("Weekly Report")
+uploaded_reports = st.file_uploader(
+    "Upload daily reports", type="docx", accept_multiple_files=True
+)
+if st.button("Generate Weekly Report") and uploaded_reports:
+    buffer = merge_daily_reports(uploaded_reports)
+
+    dates = []
+    for f in uploaded_reports:
+        match = re.search(r"(\d{2}[.\-/]\d{2}[.\-/]\d{4})", f.name)
+        if match:
+            try:
+                dates.append(
+                    pd.to_datetime(match.group(1), dayfirst=True, errors="raise")
+                )
+            except Exception:
+                pass
+    if dates:
+        dates.sort()
+        start = dates[0].strftime("%Y-%m-%d")
+        end = dates[-1].strftime("%Y-%m-%d")
+    else:
+        start = "start"
+        end = "end"
+
+    st.download_button(
+        "Download Weekly Report",
+        data=buffer.getvalue(),
+        file_name=f"weekly_report_{start}_{end}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
