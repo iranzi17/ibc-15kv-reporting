@@ -431,3 +431,12 @@ def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, u
         "HSE": "Teams maintained good safety standards this week.",
         "Weekly_Images": tpl.new_subdoc(),  # or a global gallery like weekly_images_subdoc(...)
     }
+
+tpl, ctx = build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_image_mapping)
+tpl.render(ctx)
+fname = f"Electrical_Weekly_Report_Week_{ctx['Week_No']}_{ctx['Period_From'].replace('/','.')}_{ctx['Period_To'].replace('/','.')}.docx"
+tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+tpl.save(tmp.name)
+with open(tmp.name, "rb") as fh:
+    st.download_button("⬇️ Download Weekly Report", data=fh.read(), file_name=fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
