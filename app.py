@@ -604,8 +604,21 @@ def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, u
         "HSE": "Teams maintained good safety standards this week.",
         "Weekly_Images": tpl.new_subdoc(),  # or a global gallery like weekly_images_subdoc(...)
     }
+    
+# Determine start and end dates for the weekly report
+date_objs = pd.to_datetime(selected_dates, dayfirst=True, errors="coerce")
+valid_dates = date_objs[~pd.isna(date_objs)]
+start_ymd = valid_dates.min().strftime("%Y-%m-%d") if len(valid_dates) else ""
+end_ymd = valid_dates.max().strftime("%Y-%m-%d") if len(valid_dates) else ""
 
-tpl, ctx = build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_image_mapping)
+tpl, ctx = build_weekly_context(
+    rows,
+    selected_sites,
+    start_ymd,
+    end_ymd,
+    discipline,
+    uploaded_image_mapping,
+)
 tpl.render(ctx)
 fname = f"Electrical_Weekly_Report_Week_{ctx['Week_No']}_{ctx['Period_From'].replace('/','.')}_{ctx['Period_To'].replace('/','.')}.docx"
 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
