@@ -32,6 +32,179 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
     p = (BASE_DIR / name).resolve()
     stem = p.with_suffix("").name
 
+# ========= Weekly report helpers =========
+import re, tempfile
+from docxtpl import DocxTemplate, InlineImage   # already imported earlier
+from docx.shared import Mm                      # already imported earlier
+
+# Extract simple (Description, Unit, Quantity) from free-text like "Trench excavation 110 m"
+ACT_RE = re.compile(
+    r'(?P<desc>[A-Za-z /&\-\(\)]+?)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>m|mt|nos|poles?)\b',
+    re.I,
+)
+
+def activities_from_text(txt: str):
+    out = []
+    for m in ACT_RE.finditer(txt or ""):
+        desc = m.group('desc').strip().title()
+        qty = float(m.group('qty'))
+        unit = m.group('unit').lower()
+        # Normalize units
+        if unit in ("pole", "poles"):
+            unit = "Nos"
+        elif unit == "m":
+            unit = "mt"
+        else:
+            unit = unit.title()
+        out.append((desc, unit, qty))
+    return out
+
+def build_site_table(rows_this_site):
+    """Build Mon..Sun table for one site from daily rows."""
+    agg = {}  # (desc, unit) -> [Mon..Sun]
+    for r in rows_this_site:
+        d = pd.to_datetime(r[0], dayfirst=True, errors='coerce')
+        if pd.isna(d):
+            continue
+        dayi = int(d.weekday())  # Mon=0..Sun=6
+        # Use Work_Executed (idx 6) + Another_Work_Executed (idx 8)
+        texts = " ; ".join([(r[6] or ""), (r[8] or "")])
+        for desc, unit, qty in activities_from_text(texts):
+            key = (desc, unit)
+            agg.setdefault(key, [0,0,0,0,0,0,0])[dayi] += qty
+
+    table = []
+    for (desc, unit), days in agg.items():
+        table.append({
+            "Description": desc, "Unit": unit,
+            "Mon": days[0], "Tue": days[1], "Wed": days[2], "Thu": days[3],
+            "Fri": days[4], "Sat": days[5], "Sun": days[6],
+            "Total": sum(days)
+        })
+    table.sort(key=lambda x: (x["Description"], x["Unit"]))
+    return table
+
+def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
+    """Build a subdocument with all uploaded images for a site within the week."""
+    start = pd.to_datetime(start_ymd, errors="coerce"); end = pd.to_datetime(end_ymd, errors="coerce")
+    sub = tpl.new_subdoc()
+    for (s, dstr), files in uploaded_map.items():
+        if s != site:
+            continue
+        d = pd.to_datetime(dstr, dayfirst=True, errors="coerce")
+        if pd.isna(d) or not (start <= d <= end):
+            continue
+        for f in files or []:
+            with tempfile.NamedTemporaryFile(delete=False) as t:
+                t.write(f.getbuffer()); t.flush()
+                p = sub.add_paragraph(); r = p.add_run()
+                r.add_picture(t.name, width=Mm(70))
+    return sub
+
+def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_map):
+    """
+    Returns (tpl, ctx) for Weekly_Report_Template.docx
+    - rows: sheet rows (padded)
+    - selected_sites: list[str]
+    - start_ymd/end_ymd: 'YYYY-MM-DD'
+    - discipline: 'Civil'|'Electrical'
+    - uploaded_map: {(site, date_str): [UploadedFile, ...]}
+    """
+    start = pd.to_datetime(start_ymd); end = pd.to_datetime(end_ymd)
+    week_no = int(start.isocalendar().week)
+
+    # Filter rows into the week + sites
+    by_site = {}
+    for r in rows:
+        site = r[1].strip()
+        if site not in selected_sites:
+            continue
+        d = pd.to_datetime(r[0], dayfirst=True, errors="coerce")
+        if pd.isna(d) or not (start <= d <= end):
+            continue
+        by_site.setdefault(site, []).append(r)
+
+    tpl = DocxTemplate("Weekly_Report_Template.docx")
+
+    sites_ctx = []
+    total_man = 0
+    good_lines, bad_lines = [], []
+
+    # very light keyword heuristics for summary
+    def is_blocker(text):
+        t = (text or "").lower()
+        return any(k in t for k in ["delay", "blocked", "issue", "problem", "pending", "stoppage", "approval"])
+
+    for site, site_rows in sorted(by_site.items()):
+        # table Mon..Sun
+        table = build_site_table(site_rows)
+
+        # quick site narrative
+        act_lead = ", ".join({t["Description"] for t in table} or [])
+        narrative = f"During the week, activities at {site} included {act_lead.lower()}."
+
+        # simple challenges pulled from comments/recommendations
+        challenges = []
+        for r in site_rows:
+            combined = f"{r[7] or ''} {r[10] or ''}".strip()  # Comment_on_work + Consultant_Recommandation
+            if combined and is_blocker(combined):
+                challenges.append({"Issue": combined, "Impact": "Schedule impact"})
+
+        # pictures
+        pics = site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd)
+
+        # manpower sum from Human_Resources column (idx 4), best-effort integer extraction
+        site_man = 0
+        for r in site_rows:
+            m = re.search(r"\d+", str(r[4]) or "")
+            if m:
+                site_man += int(m.group())
+        total_man += site_man
+
+        sites_ctx.append({
+            "Site_Name": site,
+            "Narrative": narrative,
+            "Table": table,
+            "Challenges": challenges[:3],
+            "Pictures": pics
+        })
+
+        good_lines.extend([t["Description"] for t in table][:3])
+        bad_lines.extend([c["Issue"] for c in challenges][:3])
+
+    # summary paragraph
+    summary = f"This week, the {discipline.lower()} teams progressed across {len(sites_ctx)} site(s)."
+    if good_lines:
+        summary += " Key activities: " + ", ".join(sorted(set(good_lines))) + "."
+    if bad_lines:
+        summary += " Risks/Delays noted: " + "; ".join(sorted(set(bad_lines))) + "."
+
+    # signatures
+    sign = SIGNATORIES.get(discipline, {})
+    cons_sig_path = resolve_asset(sign.get("Consultant_Signature"))
+    cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+
+    ctx = {
+        "Week_No": f"{week_no:02d}",
+        "Period_From": start.strftime("%d/%m/%Y"),
+        "Period_To":   end.strftime("%d/%m/%Y"),
+        "Doc_No": f"{week_no:02d}",
+        "Doc_Date": pd.Timestamp.today().strftime("%d/%m/%Y"),
+        "Project_Name": "Consultancy services related to Supervision of Engineering Design Supply and Installation of 15kV Switching Substations and Rehabilitation of Associated Distribution Lines in Kigali",
+        "Prepared_By": sign.get("Consultant_Name", ""),
+        "Prepared_Signature": cons_sig_img,
+        "Discipline": discipline,
+        "Summary": summary,
+        "Sites": sites_ctx,
+        "Ongoing": [],   # fill from a 'Weekly_Log' sheet if you add one
+        "Planned": [],   # fill from a 'Weekly_Log' sheet if you add one
+        "HSE": "Teams maintained good safety standards this week.",
+        "Weekly_Images": tpl.new_subdoc(),  # or build a global gallery if you want
+    }
+    return tpl, ctx
+# ========= end weekly helpers =========
+
+    
     # Where to look
     if p.parent != BASE_DIR:
         search_dirs = [p.parent]
