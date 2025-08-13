@@ -497,8 +497,8 @@ def build_site_table(rows_this_site):
     # rows_this_site: list of daily rows for one site (your padded schema)
     agg = {}  # (desc,unit) -> [Mon..Sun]
     for r in rows_this_site:
-        d = pd.to_datetime(r[0], dayfirst=True, errors='coerce'); 
-        if d is pd.NaT: 
+        d = pd.to_datetime(r[0], dayfirst=True, errors='coerce')
+        if pd.isna(d):
             continue
         dayi = monsun_index(d)
         texts = " ; ".join([(r[6] or ""), (r[8] or "")])  # Work_Executed + Another_Work_Executed
@@ -523,7 +523,8 @@ def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
     for (s, dstr), files in uploaded_map.items():
         if s != site: continue
         d = pd.to_datetime(dstr, dayfirst=True, errors="coerce")
-        if d is pd.NaT or not (start <= d <= end): continue
+        if pd.isna(d) or not (start <= d <= end):
+            continue
         for f in files or []:
             with tempfile.NamedTemporaryFile(delete=False) as t:
                 t.write(f.getbuffer()); t.flush()
@@ -539,7 +540,8 @@ def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, u
     for r in rows:
         if r[1].strip() not in selected_sites: continue
         d = pd.to_datetime(r[0], dayfirst=True, errors="coerce")
-        if d is pd.NaT or not (start <= d <= end): continue
+        if pd.isna(d) or not (start <= d <= end):
+            continue
         by_site.setdefault(r[1].strip(), []).append(r)
 
     tpl = DocxTemplate("Weekly_Report_Template.docx")
