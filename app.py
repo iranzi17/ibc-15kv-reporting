@@ -14,6 +14,78 @@ from googleapiclient.discovery import build
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from docx import Document
+import base64
+from pathlib import Path
+
+st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
+overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
+set_background("bg.jpg", overlay)
+
+# ---- Background image (full page, readable) ----
+def set_background(image_path: str, overlay_opacity: float = 0.55):
+    """
+    Set a full-page background image with a subtle overlay for readability.
+    overlay_opacity: 0.0 (no overlay) → 1.0 (solid)
+    """
+    # safety clamp
+    overlay_opacity = max(0.0, min(1.0, overlay_opacity))
+
+    path = Path(__file__).parent / image_path
+    with open(path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode()
+
+    # white overlay for light UI; switch to rgba(0,0,0,OPACITY) for a dark overlay
+    st.markdown(
+        f"""
+        <style>
+        /* Background (image + white overlay) */
+        [data-testid="stAppViewContainer"] {{
+            background-image:
+                linear-gradient(rgba(255,255,255,{overlay_opacity}),
+                                rgba(255,255,255,{overlay_opacity})),
+                url("data:image/jpg;base64,{encoded}");
+            background-size: cover;
+            background-position: center center;
+            background-attachment: fixed;
+        }}
+
+        /* Make Streamlit header transparent so bg is visible */
+        [data-testid="stHeader"] {{
+            background: rgba(0,0,0,0);
+        }}
+
+        /* Content cards for readability */
+        .block-container {{
+            background: rgba(255,255,255,0.85);
+            border-radius: 14px;
+            padding: 1.2rem 2rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            backdrop-filter: blur(2px);
+        }}
+
+        /* Sidebar as a softer card */
+        [data-testid="stSidebar"] > div:first-child {{
+            background: rgba(255,255,255,0.75);
+            border-radius: 12px;
+            margin: 0.5rem;
+            padding: 0.5rem;
+            backdrop-filter: blur(2px);
+        }}
+
+        /* Buttons look better on photos */
+        .stButton>button {{
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+        }}
+
+        /* Mobile tweaks */
+        @media (max-width: 768px) {{
+          .block-container {{ background: rgba(255,255,255,0.92); }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # -----------------------------
 # Paths & small helpers
