@@ -14,12 +14,55 @@ from googleapiclient.discovery import build
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from docx import Document
-import base64
-from pathlib import Path
+
 
 st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
 overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
 set_background("bg.jpg", overlay)
+# ---- Background image (full page, readable) ----
+import base64
+from pathlib import Path
+
+def set_background(image_path: str, overlay_opacity: float = 0.55, dark: bool = False):
+    overlay_opacity = max(0.0, min(1.0, overlay_opacity))
+    path = (Path(__file__).parent / image_path).resolve()
+    with open(path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode()
+
+    # choose white or black overlay tint
+    tint = "0,0,0" if dark else "255,255,255"
+
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stAppViewContainer"] {{
+            background-image:
+                linear-gradient(rgba({tint},{overlay_opacity}),
+                                rgba({tint},{overlay_opacity})),
+                url("data:image/jpg;base64,{encoded}");
+            background-size: cover;
+            background-position: center center;
+            background-attachment: fixed;
+        }}
+        [data-testid="stHeader"] {{ background: rgba(0,0,0,0); }}
+        .block-container {{
+            background: rgba(255,255,255,0.85);
+            border-radius: 14px;
+            padding: 1.2rem 2rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            backdrop-filter: blur(2px);
+        }}
+        [data-testid="stSidebar"] > div:first-child {{
+            background: rgba(255,255,255,0.75);
+            border-radius: 12px;
+            margin: 0.5rem;
+            padding: 0.5rem;
+            backdrop-filter: blur(2px);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ---- Background image (full page, readable) ----
 def set_background(image_path: str, overlay_opacity: float = 0.55):
