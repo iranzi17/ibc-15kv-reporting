@@ -19,6 +19,7 @@ from docx import Document
 
 st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
 
+
 # ---- Background image (full page, readable) ----
 def set_background(image_path: str, overlay_opacity: float = 0.55):
     """
@@ -333,7 +334,6 @@ def merge_daily_reports(files):
 # -----------------------------
 # App config & constants
 # -----------------------------
-st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
 
 SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
 SHEET_NAME = "Reports"
