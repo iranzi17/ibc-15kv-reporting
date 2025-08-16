@@ -147,6 +147,20 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
     p = (BASE_DIR / name).resolve()
     stem = p.with_suffix("").name
 
+    # Where to look
+    if p.parent != BASE_DIR:
+        search_dirs = [p.parent]
+    else:
+        search_dirs = [BASE_DIR / "signatures", BASE_DIR]
+
+    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
+    for d in search_dirs:
+        for ext in exts:
+            candidate = (d / f"{stem}{ext}").resolve()
+            if candidate.exists():
+                return str(candidate)
+    return None
+
 # ========= Weekly report helpers =========
 
 # Extract simple (Description, Unit, Quantity) from free-text like "Trench excavation 110 m"
@@ -317,21 +331,6 @@ def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, u
 # ========= end weekly helpers =========
 
     
-    # Where to look
-    if p.parent != BASE_DIR:
-        search_dirs = [p.parent]
-    else:
-        search_dirs = [BASE_DIR / "signatures", BASE_DIR]
-
-    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
-    for d in search_dirs:
-        for ext in exts:
-            candidate = (d / f"{stem}{ext}").resolve()
-            if candidate.exists():
-                return str(candidate)
-    return None
-
-
 def normalize_date(d) -> str:
     """Normalize date like '06/08/2025' -> '2025-08-06' (safe for logs etc.)."""
     try:
