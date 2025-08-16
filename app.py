@@ -474,12 +474,33 @@ st.caption("Made for efficient, multi-site daily reporting. Feedback & customiza
 # -----------------------------
 # Weekly report
 # -----------------------------
+# Determine the date range for the weekly report
+selected_dt = pd.to_datetime(selected_dates, dayfirst=True, errors="coerce")
+start_ymd = selected_dt.min().strftime("%Y-%m-%d")
+end_ymd = selected_dt.max().strftime("%Y-%m-%d")
 
+# Build context and template for the weekly report
+tpl, ctx = build_weekly_context(
+    rows,
+    selected_sites,
+    start_ymd,
+    end_ymd,
+    discipline,
+    uploaded_image_mapping,
+)
 
 tpl.render(ctx)
-fname = f"Electrical_Weekly_Report_Week_{ctx['Week_No']}_{ctx['Period_From'].replace('/','.')}_{ctx['Period_To'].replace('/','.')}.docx"
+fname = (
+    f"{discipline}_Weekly_Report_Week_{ctx['Week_No']}"
+    f"_{ctx['Period_From'].replace('/','.')}_{ctx['Period_To'].replace('/','.')}.docx"
+)
 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
 tpl.save(tmp.name)
 with open(tmp.name, "rb") as fh:
-    st.download_button("⬇️ Download Weekly Report", data=fh.read(), file_name=fname, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    st.download_button(
+        "⬇️ Download Weekly Report",
+        data=fh.read(),
+        file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
