@@ -21,7 +21,6 @@ overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
 set_background("bg.jpg", overlay)
 # ---- Background image (full page, readable) ----
 import base64
-from pathlib import Path
 
 def set_background(image_path: str, overlay_opacity: float = 0.55, dark: bool = False):
     overlay_opacity = max(0.0, min(1.0, overlay_opacity))
@@ -377,7 +376,6 @@ def merge_daily_reports(files):
 # -----------------------------
 # App config & constants
 # -----------------------------
-st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
 
 SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
 SHEET_NAME = "Reports"
