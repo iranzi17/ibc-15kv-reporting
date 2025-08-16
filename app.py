@@ -17,16 +17,6 @@ from docx.shared import Mm
 from docx import Document
 
 
-render_workwatch_header(
-    author="IRANZI",
-    brand="WorkWatch",
-    subtitle="Site Intelligence",
-    logo_path="ibc_logo.png",          # or None to hide
-    tagline="Field reports & weekly summaries"
-)
-
-
-
 # ---- Background image (full page, readable) ----
 def set_background(image_path: str, overlay_opacity: float = 0.55):
     """
@@ -160,6 +150,13 @@ def render_workwatch_header(
         unsafe_allow_html=True,
     )
 
+render_workwatch_header(
+    author="IRANZI",
+    brand="WorkWatch",
+    subtitle="Site Intelligence",
+    logo_path="ibc_logo.png",          # or None to hide
+    tagline="Field reports & weekly summaries",
+)
 
 # -----------------------------
 # Paths & small helpers
