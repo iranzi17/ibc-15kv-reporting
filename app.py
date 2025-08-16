@@ -17,7 +17,14 @@ from docx.shared import Mm
 from docx import Document
 
 
-st.set_page_config(layout="wide", page_title="Site Daily Report Generator (Pro)")
+render_workwatch_header(
+    author="IRANZI",
+    brand="WorkWatch",
+    subtitle="Site Intelligence",
+    logo_path="ibc_logo.png",          # or None to hide
+    tagline="Field reports & weekly summaries"
+)
+
 
 
 # ---- Background image (full page, readable) ----
@@ -87,6 +94,72 @@ def set_background(image_path: str, overlay_opacity: float = 0.55):
 
 overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
 set_background("bg.jpg", overlay)
+
+# ---- Styled header: WorkWatch — Site Intelligence · IRANZI ----
+import base64
+from pathlib import Path
+
+def render_workwatch_header(
+    author: str = "IRANZI",
+    brand: str = "WorkWatch",
+    subtitle: str = "Site Intelligence",
+    logo_path: str | None = "ibc_logo.png",
+    tagline: str | None = "Field reports & weekly summaries"
+):
+    # embed logo if available
+    logo_html = ""
+    if logo_path:
+        p = Path(__file__).parent / logo_path
+        if p.exists():
+            encoded = base64.b64encode(p.read_bytes()).decode()
+            logo_html = f'<img class="ww-logo" src="data:image/png;base64,{encoded}" alt="logo"/>'
+
+    # optional discipline suffix (from your sidebar radio)
+    discipline = st.session_state.get("discipline_radio")
+    suffix = f' <span class="ww-suffix">— {discipline}</span>' if discipline else ""
+
+    st.markdown(
+        f"""
+        <style>
+        .ww-wrap {{
+          display:flex; align-items:center; gap:14px; margin: .25rem 0 1rem 0;
+        }}
+        .ww-logo {{
+          height: 46px; width:auto; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.12);
+        }}
+        .ww-title {{
+          font-size: clamp(28px, 4vw, 44px);
+          line-height: 1.05;
+          font-weight: 800;
+          margin: 0;
+        }}
+        .ww-brand {{
+          background: linear-gradient(90deg,#111,#5a5a5a 60%,#111);
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+        }}
+        .ww-sub {{ opacity:.85; font-weight:700; }}
+        .ww-dot {{ opacity:.6; font-weight:600; padding:0 .2rem; }}
+        .ww-author {{ font-weight:500; opacity:.8; }}
+        .ww-suffix {{ font-weight:500; opacity:.65; }}
+        .ww-tagline {{ margin-top:.25rem; opacity:.75; font-size:0.95rem; }}
+        </style>
+
+        <div class="ww-wrap">
+          {logo_html}
+          <div>
+            <div class="ww-title">
+              ⚡ <span class="ww-brand">{brand}</span> — <span class="ww-sub">{subtitle}</span>
+              <span class="ww-dot">·</span><span class="ww-author">{author}</span>{suffix}
+            </div>
+            {f'<div class="ww-tagline">{tagline}</div>' if tagline else ''}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # -----------------------------
 # Paths & small helpers
