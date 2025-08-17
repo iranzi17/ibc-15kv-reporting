@@ -82,6 +82,13 @@ def set_background(image_path: str, overlay_opacity: float = 0.55):
         unsafe_allow_html=True,
     )
 
+# Store and retrieve the current user's role (default to Viewer)
+role = st.session_state.setdefault("user_role", "Viewer")
+
+# Show manager-only controls
+if role == "Manager":
+    st.sidebar.button("Admin Settings", icon="⚙️")
+
 overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
 set_background("bg.jpg", overlay)
 
