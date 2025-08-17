@@ -408,6 +408,7 @@ def merge_daily_reports(files):
 SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
 SHEET_NAME = "Reports"
 TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
+CACHE_FILE = BASE_DIR / "offline_cache.json"
 
 SIGNATORIES = {
     "Civil": {
@@ -430,18 +431,20 @@ SIGNATORIES = {
 }
 
 # -----------------------------
-# Google Sheets
+# Google Sheets & offline cache
 # -----------------------------
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-@st.cache_data(ttl=300)
-def get_sheet_data() -> list[list[str]]:
-    # Load credentials from Streamlit secrets
+def _build_service():
     service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
     creds = service_account.Credentials.from_service_account_info(
         service_account_info, scopes=SCOPES
     )
-    service = build("sheets", "v4", credentials=creds)
+    return build("sheets", "v4", credentials=creds)
+
+@st.cache_data(ttl=300)
+def get_sheet_data() -> list[list[str]]:
+    service = _build_service()
     sheet = service.spreadsheets()
 
     result = sheet.values().get(
@@ -449,9 +452,49 @@ def get_sheet_data() -> list[list[str]]:
         range=f"{SHEET_NAME}!A:K",  # open-ended range
     ).execute()
     rows = result.get("values", [])
-    # pad rows to 11 columns to avoid index errors
     padded_rows = [row + [""] * (11 - len(row)) for row in rows]
     return padded_rows
+
+
+def append_rows_to_sheet(rows: list[list[str]]):
+    if not rows:
+        return
+    service = _build_service()
+    body = {"values": rows}
+    service.spreadsheets().values().append(
+        spreadsheetId=SHEET_ID,
+        range=SHEET_NAME,
+        valueInputOption="USER_ENTERED",
+        body=body,
+    ).execute()
+
+
+def load_offline_cache():
+    if CACHE_FILE.exists():
+        try:
+            with open(CACHE_FILE, "r") as fh:
+                return json.load(fh)
+        except Exception:
+            return None
+    return None
+
+
+def save_offline_cache(rows, uploads):
+    data = {
+        "rows": rows,
+        "uploads": {
+            f"{site}|{date}": [
+                {
+                    "name": f.name,
+                    "data": base64.b64encode(f.getbuffer()).decode("utf-8"),
+                }
+                for f in (files or [])
+            ]
+            for (site, date), files in uploads.items()
+        },
+    }
+    with open(CACHE_FILE, "w") as fh:
+        json.dump(data, fh)
 
 
 def get_unique_sites_and_dates(rows: list[list[str]]):
@@ -464,7 +507,24 @@ def get_unique_sites_and_dates(rows: list[list[str]]):
 # -----------------------------
 st.title("📑 Site Daily Report Generator (Pro)")
 
-rows = get_sheet_data()
+cache = load_offline_cache()
+if cache and cache.get("rows"):
+    st.info("Cached offline data detected. Use the button below to sync back to the Google Sheet.")
+    if st.button("Sync cached data to Google Sheet"):
+        try:
+            append_rows_to_sheet(cache.get("rows", []))
+            CACHE_FILE.unlink()
+            st.success("Cached data synced to Google Sheet.")
+            cache = None
+        except Exception as e:
+            st.error(f"Sync failed: {e}")
+
+try:
+    rows = get_sheet_data()
+except Exception as e:
+    rows = []
+    st.warning("Unable to fetch data from the Google Sheet.")
+
 if not rows:
     st.warning("No data found in the Google Sheet.")
     st.stop()
@@ -472,6 +532,7 @@ if not rows:
 sites, all_dates = get_unique_sites_and_dates(rows)
 
 with st.sidebar:
+    offline_enabled = st.checkbox("Enable offline cache", value=False)
     st.header("Step 0: Select Discipline")
     discipline = st.radio(
         "Choose discipline:", ["Civil", "Electrical"], index=0, key="discipline_radio"
@@ -530,6 +591,9 @@ if site_date_pairs:
             uploaded_image_mapping[(site_name, date)] = imgs
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
+
+if offline_enabled:
+    save_offline_cache(filtered_rows, uploaded_image_mapping)
 
 # -----------------------------
 # Generate reports
