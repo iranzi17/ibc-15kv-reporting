@@ -531,6 +531,13 @@ if site_date_pairs:
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
 
+# Sidebar status overview
+filtered_count = len(filtered_rows)
+total_uploaded_images = sum(len(v) for v in uploaded_image_mapping.values())
+st.sidebar.markdown("### Status Overview")
+st.sidebar.write(f"Filtered rows: {filtered_count}")
+st.sidebar.write(f"Uploaded images: {total_uploaded_images}")
+
 # -----------------------------
 # Generate reports
 # -----------------------------
