@@ -508,6 +508,7 @@ uploaded_image_mapping: dict[tuple[str, str], list] = {}
 
 # Preview
 st.subheader("Preview Reports to be Generated")
+show_dashboard = st.checkbox("Show Dashboard")
 df_preview = pd.DataFrame(
     filtered_rows,
     columns=[
@@ -517,6 +518,26 @@ df_preview = pd.DataFrame(
     ],
 )
 st.dataframe(df_preview, use_container_width=True, hide_index=True)
+
+if show_dashboard:
+    dash_df = df_preview.copy()
+    dash_df = dash_df[dash_df["Site_Name"].isin(selected_sites)]
+    dash_df = dash_df[dash_df["Date"].isin(selected_dates)]
+    if "Discipline" in dash_df.columns:
+        dash_df = dash_df[dash_df["Discipline"] == discipline]
+
+    st.subheader("Dashboard")
+    st.dataframe(dash_df, use_container_width=True, hide_index=True)
+
+    if "Work_Executed" in dash_df.columns:
+        dash_df = dash_df.assign(
+            Work_Executed=pd.to_numeric(dash_df["Work_Executed"], errors="coerce"),
+            Date=pd.to_datetime(dash_df["Date"], errors="coerce"),
+        ).dropna(subset=["Work_Executed", "Date"])
+        if not dash_df.empty:
+            st.line_chart(
+                dash_df.sort_values("Date").set_index("Date")["Work_Executed"]
+            )
 
 # Image uploads
 if site_date_pairs:
