@@ -7,4 +7,3 @@ docxtpl
 pillow
 google-api-python-client
 openpyxl
-.
