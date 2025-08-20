@@ -196,6 +196,56 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
                 return str(candidate)
     return None
 
+from openpyxl import load_workbook
+from io import BytesIO
+
+def update_timesheet_template_by_discipline(template_path, all_rows, selected_dates, discipline):
+    wb = load_workbook(template_path)
+    ws = wb.active
+
+    for date_str in selected_dates:
+        try:
+            day_num = int(pd.to_datetime(date_str, dayfirst=True).day)
+        except:
+            continue
+
+        # Filter rows by date AND discipline
+        day_rows = [
+            r for r in all_rows
+            if r[0] == date_str and st.session_state.get("discipline_radio") == discipline
+        ]
+
+        if not day_rows:
+            continue
+
+        # Extract site names
+        sites = sorted(set(r[1] for r in day_rows if r[1]))
+
+        # Extract and merge activities
+        activities = []
+        for r in day_rows:
+            site = r[1]
+            act1 = r[6] or ""
+            act2 = r[8] or ""
+            combined = " / ".join(filter(None, [act1.strip(), act2.strip()]))
+            if combined:
+                activities.append(f"{site}: {combined}")
+
+        # Fill Excel row for the matching day number
+        for row in range(19, 60):
+            cell_value = ws[f"A{row}"].value
+            if cell_value == day_num:
+                ws[f"F{row}"] = ", ".join(sites)
+                ws[f"G{row}"] = "\n".join(activities[:8]) or "Supervision of site activities"
+                break
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
+
 # ========= Weekly report helpers =========
 
 # Extract simple (Description, Unit, Quantity) from free-text like "Trench excavation 110 m"
@@ -734,4 +784,51 @@ with open(tmp.name, "rb") as fh:
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+from openpyxl import load_workbook
+from io import BytesIO
+
+def update_timesheet_template_by_discipline(template_path, all_rows, selected_dates, discipline):
+    wb = load_workbook(template_path)
+    ws = wb.active
+
+    for date_str in selected_dates:
+        try:
+            day_num = int(pd.to_datetime(date_str, dayfirst=True).day)
+        except:
+            continue
+
+        # Filter rows by date AND discipline
+        day_rows = [
+            r for r in all_rows
+            if r[0] == date_str and st.session_state.get("discipline_radio") == discipline
+        ]
+
+        if not day_rows:
+            continue
+
+        # Extract site names
+        sites = sorted(set(r[1] for r in day_rows if r[1]))
+
+        # Extract and merge activities
+        activities = []
+        for r in day_rows:
+            site = r[1]
+            act1 = r[6] or ""
+            act2 = r[8] or ""
+            combined = " / ".join(filter(None, [act1.strip(), act2.strip()]))
+            if combined:
+                activities.append(f"{site}: {combined}")
+
+        # Fill Excel row for the matching day number
+        for row in range(19, 60):
+            cell_value = ws[f"A{row}"].value
+            if cell_value == day_num:
+                ws[f"F{row}"] = ", ".join(sites)
+                ws[f"G{row}"] = "\n".join(activities[:8]) or "Supervision of site activities"
+                break
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
 
