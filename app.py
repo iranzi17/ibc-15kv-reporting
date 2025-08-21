@@ -170,6 +170,12 @@ render_workwatch_header(
 # -----------------------------
 BASE_DIR = Path(__file__).parent.resolve()
 
+# Column index (0-based) for the "Discipline" field in sheet rows.
+# Sheet structure: Date, Site_Name, District, Work, Human_Resources, Supply,
+# Work_Executed, Comment_on_work, Another_Work_Executed, Comment_on_HSE,
+# Consultant_Recommandation, Discipline
+DISCIPLINE_COL = 11
+
 def resolve_asset(name: Optional[str]) -> Optional[str]:
     """
     Find an asset (e.g., signature image) whether it’s in ./ or ./signatures/,
@@ -212,7 +218,11 @@ def update_timesheet_template_by_discipline(template_path, all_rows, selected_da
         # Filter rows by date AND discipline
         day_rows = [
             r for r in all_rows
-            if r[0] == date_str and st.session_state.get("discipline_radio") == discipline
+            if (
+                r[0] == date_str
+                and len(r) > DISCIPLINE_COL
+                and r[DISCIPLINE_COL] == discipline
+            )
         ]
 
         if not day_rows:
@@ -800,7 +810,11 @@ def update_timesheet_template_by_discipline(template_path, all_rows, selected_da
         # Filter rows by date AND discipline
         day_rows = [
             r for r in all_rows
-            if r[0] == date_str and st.session_state.get("discipline_radio") == discipline
+            if (
+                r[0] == date_str
+                and len(r) > DISCIPLINE_COL
+                and r[DISCIPLINE_COL] == discipline
+            )
         ]
 
         if not day_rows:
