@@ -206,7 +206,8 @@ def update_timesheet_template_by_discipline(template_path, all_rows, selected_da
     for date_str in selected_dates:
         try:
             day_num = int(pd.to_datetime(date_str, dayfirst=True).day)
-        except:
+        except (ValueError, TypeError):
+            print(f"Invalid date format: {date_str}")
             continue
 
         # Filter rows by date AND discipline
@@ -794,7 +795,8 @@ def update_timesheet_template_by_discipline(template_path, all_rows, selected_da
     for date_str in selected_dates:
         try:
             day_num = int(pd.to_datetime(date_str, dayfirst=True).day)
-        except:
+        except (ValueError, TypeError):
+            print(f"Invalid date format: {date_str}")
             continue
 
         # Filter rows by date AND discipline
