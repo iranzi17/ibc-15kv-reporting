@@ -591,12 +591,12 @@ sites, all_dates = get_unique_sites_and_dates(rows)
 
 with st.sidebar:
     offline_enabled = st.checkbox("Enable offline cache", value=False)
-    st.header("Step 0: Select Discipline")
+    st.header("Select Discipline")
     discipline = st.radio(
         "Choose discipline:", ["Civil", "Electrical"], index=0, key="discipline_radio"
     )
 
-    st.header("Step 1: Select Sites")
+    st.header("Select Sites")
     site_choices = ["All Sites"] + sites
     selected_sites = st.multiselect(
         "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
@@ -604,7 +604,7 @@ with st.sidebar:
     if "All Sites" in selected_sites or not selected_sites:
         selected_sites = sites
 
-    st.header("Step 2: Select Dates")
+    st.header("Select Dates")
     site_dates = sorted({row[0].strip() for row in rows if row[1].strip() in selected_sites})
     date_choices = ["All Dates"] + site_dates
     selected_dates = st.multiselect(
