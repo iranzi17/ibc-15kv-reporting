@@ -217,8 +217,6 @@ def update_timesheet_template_by_discipline(template_path, all_rows, selected_da
                 if r[0] == date_str and st.session_state.get("discipline_radio") == discipline
             ]
 
-            if not day_rows:
-                continue
 
 
 
@@ -787,6 +785,7 @@ with open(tmp.name, "rb") as fh:
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
 
 
 
