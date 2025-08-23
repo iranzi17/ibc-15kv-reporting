@@ -15,7 +15,7 @@ from googleapiclient.discovery import build
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from docx import Document
-
+from openpyxl import load_workbook
 
 # ---- Background image (full page, readable) ----
 def set_background(image_path: str, overlay_opacity: float = 0.55):
@@ -93,8 +93,6 @@ overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
 set_background("bg.jpg", overlay)
 
 # ---- Styled header: WorkWatch — Site Intelligence · IRANZI ----
-import base64
-from pathlib import Path
 
 def render_workwatch_header(
     author: str = "IRANZI",
@@ -170,6 +168,12 @@ render_workwatch_header(
 # -----------------------------
 BASE_DIR = Path(__file__).parent.resolve()
 
+# Column index (0-based) for the "Discipline" field in sheet rows.
+# Sheet structure: Date, Site_Name, District, Work, Human_Resources, Supply,
+# Work_Executed, Comment_on_work, Another_Work_Executed, Comment_on_HSE,
+# Consultant_Recommandation, Discipline
+DISCIPLINE_COL = 11
+
 def resolve_asset(name: Optional[str]) -> Optional[str]:
     """
     Find an asset (e.g., signature image) whether it’s in ./ or ./signatures/,
@@ -196,9 +200,6 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
                 return str(candidate)
     return None
 
-from openpyxl import load_workbook
-from io import BytesIO
-
 def update_timesheet_template_by_discipline(template_path, all_rows, selected_dates, discipline):
     wb = load_workbook(template_path)
     try:
@@ -217,8 +218,7 @@ def update_timesheet_template_by_discipline(template_path, all_rows, selected_da
             ]
 
 
-            # Extract site names
-            sites = sorted(set(r[1] for r in day_rows if r[1]))
+
 
             # Extract and merge activities
             activities = []
@@ -785,41 +785,7 @@ with open(tmp.name, "rb") as fh:
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
-from openpyxl import load_workbook
-from io import BytesIO
-
-def update_timesheet_template_by_discipline(template_path, all_rows, selected_dates, discipline):
-    wb = load_workbook(template_path)
 
 
-            if not day_rows:
-                continue
 
-            # Extract site names
-            sites = sorted(set(r[1] for r in day_rows if r[1]))
-
-            # Extract and merge activities
-            activities = []
-            for r in day_rows:
-                site = r[1]
-                act1 = r[6] or ""
-                act2 = r[8] or ""
-                combined = " / ".join(filter(None, [act1.strip(), act2.strip()]))
-                if combined:
-                    activities.append(f"{site}: {combined}")
-
-            # Fill Excel row for the matching day number
-            for row in range(19, 60):
-                cell_value = ws[f"A{row}"].value
-                if cell_value == day_num:
-                    ws[f"F{row}"] = ", ".join(sites)
-                    ws[f"G{row}"] = "\n".join(activities[:8]) or "Supervision of site activities"
-                    break
-
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        return output
-    finally:
-        wb.close()
 
