@@ -475,7 +475,7 @@ SIGNATORIES = {
         # Keep stems; resolver will find .jpg/.png in repo root or ./signatures
         "Consultant_Signature": "iranzi_prince_jean_claude",
         "Contractor_Name": "Issac HABIMANA",
-        "Contractor_Title": "Civil Engineer",
+        "Contractor_Title": "Electrical Engineer",
         "Contractor_Signature": "issac_habimana",
     },
     "Electrical": {
