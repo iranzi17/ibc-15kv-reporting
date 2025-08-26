@@ -474,9 +474,9 @@ SIGNATORIES = {
         "Consultant_Title": "Civil Engineer",
         # Keep stems; resolver will find .jpg/.png in repo root or ./signatures
         "Consultant_Signature": "iranzi_prince_jean_claude",
-        "Contractor_Name": "RUTALINDWA Olivier",
+        "Contractor_Name": "Issac HABIMANA",
         "Contractor_Title": "Civil Engineer",
-        "Contractor_Signature": "rutalindwa_olivier",
+        "Contractor_Signature": "issac_habimana",
     },
     "Electrical": {
         "Consultant_Name": "Alexis IVUGIZA",
