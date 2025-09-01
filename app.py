@@ -311,12 +311,11 @@ def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
             with tempfile.NamedTemporaryFile(delete=False) as t:
                 t.write(f.getbuffer()); t.flush()
                 images.append(t.name)
-    # Arrange images in table: 2 per row, third below
+    # Arrange images in table: 2 per row, always side by side, wrap to next row as needed
     if images:
-        # Get page width (A4: 210mm - margins)
         page_width_mm = 180  # Approximate usable width
         img_per_row = 2
-        img_width = Mm(page_width_mm / img_per_row - 5)  # 5mm padding
+        img_width = Mm(page_width_mm / img_per_row - 2)  # minimal padding
         table = sub.add_table(rows=0, cols=img_per_row)
         for i in range(0, len(images), img_per_row):
             row = table.add_row().cells
@@ -325,11 +324,6 @@ def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
                 row[1].paragraphs[0].add_run().add_picture(images[i+1], width=img_width)
             else:
                 row[1].text = ""
-        # If 3 images, put third below
-        if len(images) == 3:
-            row = table.add_row().cells
-            row[0].paragraphs[0].add_run().add_picture(images[2], width=img_width)
-            row[1].text = ""
     return sub
 
 def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_map):
