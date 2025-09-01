@@ -774,7 +774,6 @@ selected_dt = pd.to_datetime(selected_dates, dayfirst=True, errors="coerce")
 start_ymd = selected_dt.min().strftime("%Y-%m-%d")
 end_ymd = selected_dt.max().strftime("%Y-%m-%d")
 
-# Build context and template for the weekly report
 tpl, ctx = build_weekly_context(
     rows,
     selected_sites,
@@ -784,6 +783,25 @@ tpl, ctx = build_weekly_context(
     uploaded_image_mapping,
 )
 
+# Preview box before download
+with st.expander("👀 Preview Weekly Report"):
+    st.write(f"**Week {ctx['Week_No']} ({ctx['Period_From']} - {ctx['Period_To']})**")
+    for site in ctx.get("Sites", ctx.get("sites_ctx", [])):
+        st.subheader(site.get("Site_Name", "Site"))
+        st.write(site.get("Narrative", ""))
+        # Try to preview images if possible
+        pics = site.get("Pictures")
+        if pics and hasattr(pics, "_element"):
+            # Try to extract image paths from the subdoc (best effort)
+            for tbl in pics._element.findall(".//w:tbl", pics._element.nsmap):
+                for cell in tbl.findall(".//w:tc", pics._element.nsmap):
+                    for pic in cell.findall(".//a:blip", pics._element.nsmap):
+                        img_path = pic.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
+                        if img_path:
+                            st.image(img_path, width=120)
+        st.markdown("---")
+
+
 tpl.render(ctx)
 fname = (
     f"{discipline}_Weekly_Report_Week_{ctx['Week_No']}"
@@ -791,6 +809,21 @@ fname = (
 )
 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
 tpl.save(tmp.name)
+
+# Convert DOCX to PDF for preview
+import shutil
+from docx2pdf import convert
+pdf_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+try:
+    convert(tmp.name, pdf_tmp.name)
+    pdf_data = open(pdf_tmp.name, "rb").read()
+    # Show PDF preview in Streamlit
+    st.markdown("**Preview (PDF):**")
+    st.download_button("⬇️ Download PDF Preview", data=pdf_data, file_name=fname.replace(".docx", ".pdf"), mime="application/pdf")
+    st.components.v1.iframe(f"file://{pdf_tmp.name}", height=600)
+except Exception as e:
+    st.warning(f"PDF preview failed: {e}")
+
 with open(tmp.name, "rb") as fh:
     st.download_button(
         "⬇️ Download Weekly Report",
