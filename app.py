@@ -812,11 +812,18 @@ tpl.save(tmp.name)
 
 # Convert DOCX to PDF for preview
 
-# Use pypandoc for PDF conversion (cross-platform)
-import pypandoc
+
+# Use aspose.words for PDF conversion (cross-platform)
+import aspose.words as aw
 pdf_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
 try:
-    output = pypandoc.convert_file(tmp.name, 'pdf', outputfile=pdf_tmp.name)
+    # Load Aspose license if available
+    license_path = "Aspose.Words.lic"
+    if os.path.exists(license_path):
+        lic = aw.License()
+        lic.set_license(license_path)
+    doc = aw.Document(tmp.name)
+    doc.save(pdf_tmp.name)
     pdf_data = open(pdf_tmp.name, "rb").read()
     st.markdown("**Preview (PDF):**")
     st.download_button("⬇️ Download PDF Preview", data=pdf_data, file_name=fname.replace(".docx", ".pdf"), mime="application/pdf")
