@@ -811,13 +811,13 @@ tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
 tpl.save(tmp.name)
 
 # Convert DOCX to PDF for preview
-import shutil
-from docx2pdf import convert
+
+# Use pypandoc for PDF conversion (cross-platform)
+import pypandoc
 pdf_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
 try:
-    convert(tmp.name, pdf_tmp.name)
+    output = pypandoc.convert_file(tmp.name, 'pdf', outputfile=pdf_tmp.name)
     pdf_data = open(pdf_tmp.name, "rb").read()
-    # Show PDF preview in Streamlit
     st.markdown("**Preview (PDF):**")
     st.download_button("⬇️ Download PDF Preview", data=pdf_data, file_name=fname.replace(".docx", ".pdf"), mime="application/pdf")
     st.components.v1.iframe(f"file://{pdf_tmp.name}", height=600)
