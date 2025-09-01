@@ -814,16 +814,13 @@ tpl.save(tmp.name)
 
 
 
-# Use mammoth for HTML preview (cross-platform)
-import mammoth
-try:
-    with open(tmp.name, "rb") as docx_file:
-        result = mammoth.convert_to_html(docx_file)
-        html = result.value  # The generated HTML
-        st.markdown("**Preview (HTML):**")
-        st.components.v1.html(html, height=600, scrolling=True)
-except Exception as e:
-    st.warning(f"HTML preview failed: {e}")
+with open(tmp.name, "rb") as fh:
+    st.download_button(
+        "⬇️ Download Weekly Report",
+        data=fh.read(),
+        file_name=fname,
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 with open(tmp.name, "rb") as fh:
     st.download_button(
