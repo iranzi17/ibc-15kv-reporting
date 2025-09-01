@@ -813,23 +813,17 @@ tpl.save(tmp.name)
 # Convert DOCX to PDF for preview
 
 
-# Use aspose.words for PDF conversion (cross-platform)
-import aspose.words as aw
-pdf_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+
+# Use mammoth for HTML preview (cross-platform)
+import mammoth
 try:
-    # Load Aspose license if available
-    license_path = "Aspose.Words.lic"
-    if os.path.exists(license_path):
-        lic = aw.License()
-        lic.set_license(license_path)
-    doc = aw.Document(tmp.name)
-    doc.save(pdf_tmp.name)
-    pdf_data = open(pdf_tmp.name, "rb").read()
-    st.markdown("**Preview (PDF):**")
-    st.download_button("⬇️ Download PDF Preview", data=pdf_data, file_name=fname.replace(".docx", ".pdf"), mime="application/pdf")
-    st.components.v1.iframe(f"file://{pdf_tmp.name}", height=600)
+    with open(tmp.name, "rb") as docx_file:
+        result = mammoth.convert_to_html(docx_file)
+        html = result.value  # The generated HTML
+        st.markdown("**Preview (HTML):**")
+        st.components.v1.html(html, height=600, scrolling=True)
 except Exception as e:
-    st.warning(f"PDF preview failed: {e}")
+    st.warning(f"HTML preview failed: {e}")
 
 with open(tmp.name, "rb") as fh:
     st.download_button(
