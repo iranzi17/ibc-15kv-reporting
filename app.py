@@ -300,6 +300,7 @@ def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
     """Build a subdocument with all uploaded images for a site within the week."""
     start = pd.to_datetime(start_ymd, errors="coerce"); end = pd.to_datetime(end_ymd, errors="coerce")
     sub = tpl.new_subdoc()
+    images = []
     for (s, dstr), files in uploaded_map.items():
         if s != site:
             continue
@@ -309,8 +310,26 @@ def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
         for f in files or []:
             with tempfile.NamedTemporaryFile(delete=False) as t:
                 t.write(f.getbuffer()); t.flush()
-                p = sub.add_paragraph(); r = p.add_run()
-                r.add_picture(t.name, width=Mm(70))
+                images.append(t.name)
+    # Arrange images in table: 2 per row, third below
+    if images:
+        # Get page width (A4: 210mm - margins)
+        page_width_mm = 180  # Approximate usable width
+        img_per_row = 2
+        img_width = Mm(page_width_mm / img_per_row - 5)  # 5mm padding
+        table = sub.add_table(rows=0, cols=img_per_row)
+        for i in range(0, len(images), img_per_row):
+            row = table.add_row().cells
+            row[0].paragraphs[0].add_run().add_picture(images[i], width=img_width)
+            if i+1 < len(images):
+                row[1].paragraphs[0].add_run().add_picture(images[i+1], width=img_width)
+            else:
+                row[1].text = ""
+        # If 3 images, put third below
+        if len(images) == 3:
+            row = table.add_row().cells
+            row[0].paragraphs[0].add_run().add_picture(images[2], width=img_width)
+            row[1].text = ""
     return sub
 
 def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_map):
