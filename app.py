@@ -665,69 +665,8 @@ if st.button("🚀 Generate & Download All Reports"):
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
 
-# -----------------------------
-# Weekly report
-# -----------------------------
-# Determine the date range for the weekly report
-selected_dt = pd.to_datetime(selected_dates, dayfirst=True, errors="coerce")
-start_ymd = selected_dt.min().strftime("%Y-%m-%d")
-end_ymd = selected_dt.max().strftime("%Y-%m-%d")
-
-tpl, ctx = build_weekly_context(
-    rows,
-    selected_sites,
-    start_ymd,
-    end_ymd,
-    discipline,
-    uploaded_image_mapping,
-)
-
-# Preview box before download
-with st.expander("👀 Preview Weekly Report"):
-    st.write(f"**Week {ctx['Week_No']} ({ctx['Period_From']} - {ctx['Period_To']})**")
-    for site in ctx.get("Sites", ctx.get("sites_ctx", [])):
-        st.subheader(site.get("Site_Name", "Site"))
-        st.write(site.get("Narrative", ""))
-        # Try to preview images if possible
-        pics = site.get("Pictures")
-        if pics and hasattr(pics, "_element"):
-            # Try to extract image paths from the subdoc (best effort)
-            for tbl in pics._element.findall(".//w:tbl", pics._element.nsmap):
-                for cell in tbl.findall(".//w:tc", pics._element.nsmap):
-                    for pic in cell.findall(".//a:blip", pics._element.nsmap):
-                        img_path = pic.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
-                        if img_path:
-                            st.image(img_path, width=120)
-        st.markdown("---")
 
 
-tpl.render(ctx)
-fname = (
-    f"{discipline}_Weekly_Report_Week_{ctx['Week_No']}"
-    f"_{ctx['Period_From'].replace('/','.')}_{ctx['Period_To'].replace('/','.')}.docx"
-)
-tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
-tpl.save(tmp.name)
-
-# Convert DOCX to PDF for preview
-
-
-
-with open(tmp.name, "rb") as fh:
-    st.download_button(
-        "⬇️ Download Weekly Report",
-        data=fh.read(),
-        file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
-
-with open(tmp.name, "rb") as fh:
-    st.download_button(
-        "⬇️ Download Weekly Report",
-        data=fh.read(),
-        file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
 
 
 
