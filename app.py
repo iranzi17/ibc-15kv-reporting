@@ -589,9 +589,7 @@ else:
 # -----------------------------
 if st.button("🚀 Generate & Download All Reports"):
     with st.spinner("Generating reports, please wait..."):
-        temp_dir = tempfile.mkdtemp()
         zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
             for row in filtered_rows:
                 (
@@ -606,12 +604,13 @@ if st.button("🚀 Generate & Download All Reports"):
                 image_files = uploaded_image_mapping.get((site_name, date), []) or []
                 images_subdoc = tpl.new_subdoc()
                 for img_file in image_files:
-                    img_path = os.path.join(temp_dir, img_file.name)
-                    with open(img_path, "wb") as f:
-                        f.write(img_file.getbuffer())
-                    p = images_subdoc.add_paragraph()
-                    r = p.add_run()
-                    r.add_picture(img_path, width=Mm(70))
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
+                        tmp_img.write(img_file.getbuffer())
+                        tmp_img.flush()
+                        p = images_subdoc.add_paragraph()
+                        r = p.add_run()
+                        r.add_picture(tmp_img.name, width=Mm(70))
+                    os.remove(tmp_img.name)
 
                 # Signatories (names/titles + signatures)
                 sign_info = SIGNATORIES.get(discipline, {})
@@ -648,10 +647,10 @@ if st.button("🚀 Generate & Download All Reports"):
                 date_for_title = format_date_title(date)
                 out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
                 out_name = safe_filename(out_name)  # guard against illegal chars/length
-                out_path = os.path.join(temp_dir, out_name)
-
-                tpl.save(out_path)
-                zipf.write(out_path, arcname=out_name)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
+                    tpl.save(tmp_docx.name)
+                    zipf.write(tmp_docx.name, arcname=out_name)
+                    os.remove(tmp_docx.name)
 
         zip_buffer.flush()
         zip_buffer.seek(0)
@@ -664,10 +663,3 @@ if st.button("🚀 Generate & Download All Reports"):
 
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
-
-
-
-
-
-
-
