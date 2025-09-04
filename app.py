@@ -571,6 +571,26 @@ if show_dashboard:
             )
 
 # Image uploads
+
+# Gallery preview and customization controls
+st.subheader("Gallery Preview & Customization")
+img_width_mm = st.slider("Image width (mm)", min_value=30, max_value=100, value=70, step=5)
+img_per_row = st.selectbox("Images per row", options=[1,2,3,4], index=1)
+add_border = st.checkbox("Add border to images", value=False)
+spacing_mm = st.slider("Spacing between images (mm)", min_value=0, max_value=20, value=2, step=1)
+
+for site_name, date in site_date_pairs:
+    image_files = uploaded_image_mapping.get((site_name, date), []) or []
+    if image_files:
+        st.markdown(f"**Gallery for {site_name} ({date})**")
+        cols = st.columns(img_per_row)
+        for idx, img_file in enumerate(image_files):
+            with cols[idx % img_per_row]:
+                st.image(img_file, width=200)
+                if add_border:
+                    st.markdown("<div style='border:1px solid #888; margin-bottom:5px;'></div>", unsafe_allow_html=True)
+
+# Image uploads
 if site_date_pairs:
     for site_name, date in site_date_pairs:
         with st.expander(f"Upload Images for {site_name} ({date})"):
@@ -600,17 +620,32 @@ if st.button("🚀 Generate & Download All Reports"):
 
                 tpl = DocxTemplate(TEMPLATE_PATH)
 
-                # Images from uploader → put each photo in a subdocument paragraph
+                # Images from uploader → put each photo in a subdocument paragraph with custom styling
                 image_files = uploaded_image_mapping.get((site_name, date), []) or []
                 images_subdoc = tpl.new_subdoc()
-                for img_file in image_files:
+                row_cells = []
+                for idx, img_file in enumerate(image_files):
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
                         tmp_img.write(img_file.getbuffer())
                         tmp_img.flush()
-                        p = images_subdoc.add_paragraph()
-                        r = p.add_run()
-                        r.add_picture(tmp_img.name, width=Mm(70))
-                    os.remove(tmp_img.name)
+                        row_cells.append(tmp_img.name)
+                    # Add images per row
+                    if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
+                        table = images_subdoc.add_table(rows=1, cols=img_per_row)
+                        for col_idx, img_path in enumerate(row_cells):
+                            cell = table.rows[0].cells[col_idx]
+                            run = cell.paragraphs[0].add_run()
+                            run.add_picture(img_path, width=Mm(img_width_mm))
+                            if add_border:
+                                run.font.color.rgb = None
+                                cell._element.get_or_add_tcPr().append(
+                                    tpl.docx._element.makeelement('w:tcBorders')
+                                )
+                            # Add spacing (not natively supported, but can add empty paragraphs)
+                            for _ in range(spacing_mm // 2):
+                                cell.paragraphs[0].add_run().add_text("\u2003")
+                            os.remove(img_path)
+                        row_cells = []
 
                 # Signatories (names/titles + signatures)
                 sign_info = SIGNATORIES.get(discipline, {})
