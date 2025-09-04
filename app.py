@@ -150,10 +150,10 @@ def render_workwatch_header(
             </div>
             {f'<div class="ww-tagline">{tagline}</div>' if tagline else ''}
           </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            img_width_mm = st.slider("Image width (mm)", min_value=30, max_value=100, value=70, step=5)
+            img_per_row = st.selectbox("Images per row", options=[1,2,3,4], index=1)
+            add_border = st.checkbox("Add border to images", value=False)
+            spacing_px = st.slider("Spacing between images (px)", min_value=0, max_value=40, value=8, step=2)
 
 render_workwatch_header(
     author="IRANZI",
@@ -162,9 +162,11 @@ render_workwatch_header(
     logo_path="ibc_logo.png",          # or None to hide
     tagline="Field reports & weekly summaries",
 )
-
-# -----------------------------
-# Paths & small helpers
+                            border_style = f"border:1px solid #888;" if add_border else ""
+                            spacing_style = f"margin-bottom:{spacing_px}px; margin-right:{spacing_px}px;"
+                            st.markdown(f"<div style='{border_style}{spacing_style}'>", unsafe_allow_html=True)
+                            st.image(img_file, width=int(img_width_mm*3.78))
+                            st.markdown("</div>", unsafe_allow_html=True)
 # -----------------------------
 BASE_DIR = Path(__file__).parent.resolve()
 
@@ -655,33 +657,33 @@ if st.button("🚀 Generate & Download All Reports"):
                 cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
 
                 # Context for DOCX
-                context = {
-                    "Site_Name": site_name or "",
-                    "Date": date or "",
-                    "District": district or "",
-                    "Work": work or "",
-                    "Human_Resources": human_resources or "",
-                    "Supply": supply or "",
-                    "Work_Executed": work_executed or "",
-                    "Comment_on_work": comment_on_work or "",
-                    "Another_Work_Executed": another_work_executed or "",
-                    "Comment_on_HSE": comment_on_hse or "",
-                    "Consultant_Recommandation": consultant_recommandation or "",
-                    "Images": images_subdoc,  # ← use subdocument, not RichText
-                    "Consultant_Name": sign_info.get("Consultant_Name", ""),
-                    "Consultant_Title": sign_info.get("Consultant_Title", ""),
-                    "Contractor_Name": sign_info.get("Contractor_Name", ""),
-                    "Contractor_Title": sign_info.get("Contractor_Title", ""),
-                    "Consultant_Signature": cons_sig_img,
-                    "Contractor_Signature": cont_sig_img,
-                }
-
-                tpl.render(context)
-
-                # Filename pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
-                date_for_title = format_date_title(date)
-                out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
-                out_name = safe_filename(out_name)  # guard against illegal chars/length
+                row_cells = []
+                for idx, img_file in enumerate(image_files):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
+                        tmp_img.write(img_file.getbuffer())
+                        tmp_img.flush()
+                        row_cells.append(tmp_img.name)
+                    # Add images per row
+                    if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
+                        table = images_subdoc.add_table(rows=1, cols=img_per_row)
+                        for col_idx, img_path in enumerate(row_cells):
+                            cell = table.rows[0].cells[col_idx]
+                            run = cell.paragraphs[0].add_run()
+                            run.add_picture(img_path, width=Mm(img_width_mm))
+                            if add_border:
+                                tcPr = cell._element.get_or_add_tcPr()
+                                borders_xml = """
+                                <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
+                                    <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                </w:tcBorders>
+                                """
+                                from docx.oxml import parse_xml
+                                tcPr.append(parse_xml(borders_xml))
+                            os.remove(img_path)
+                        row_cells = []
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
                     tpl.save(tmp_docx.name)
                     zipf.write(tmp_docx.name, arcname=out_name)
