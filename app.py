@@ -182,6 +182,7 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
     with or without extension. Tries .png/.jpg/.jpeg/.webp.
     Returns an absolute path or None.
     """
+    # rest of the function remains the same
     if not name:
         return None
 
