@@ -176,6 +176,7 @@ BASE_DIR = Path(__file__).parent.resolve()
 # Consultant_Recommandation, Discipline
 DISCIPLINE_COL = 11
 
+
 def resolve_asset(name: Optional[str]) -> Optional[str]:
 """Find an asset (e.g., signature image) whether it's in ./ or ./signatures/,
     with or without extension. Tries .png/.jpg/.jpeg/.webp. Returns an absolute path or None."""
