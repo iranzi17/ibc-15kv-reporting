@@ -178,9 +178,9 @@ DISCIPLINE_COL = 11
 
 def resolve_asset(name: Optional[str]) -> Optional[str]:
     """
-    Find an asset (e.g., signature image) whether it's in ./ or ./signatures/,
-    with or without extension. Tries .png/.jpg/.jpeg/.webp.
-    Returns an absolute path or None.
+    Find an asset (e.g., signature image) whether it's in ./ or ./signatures/, with or without extension. Tries .png/.jpg/.jpeg/.webp. Returns an absolute path or None."""
+    # rest of the function remains the same
+
     """
     # rest of the function remains the same
     if not name:
