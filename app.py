@@ -1,3 +1,4 @@
+# cleaned_app.py
 import os
 import re
 import json
@@ -17,24 +18,35 @@ from docx.shared import Mm
 from docx import Document
 from openpyxl import load_workbook
 
-# ---- Background image (full page, readable) ----
+# -----------------------------
+# Globals
+# -----------------------------
+BASE_DIR = Path(__file__).parent.resolve()
+TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
+SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
+SHEET_NAME = "Reports"
+CACHE_FILE = BASE_DIR / "offline_cache.json"
+
+DISCIPLINE_COL = 11  # (kept from original)
+
+# -----------------------------
+# Utility functions
+# -----------------------------
 def set_background(image_path: str, overlay_opacity: float = 0.55):
     """
     Set a full-page background image with a subtle overlay for readability.
     overlay_opacity: 0.0 (no overlay) → 1.0 (solid)
     """
-    # safety clamp
     overlay_opacity = max(0.0, min(1.0, overlay_opacity))
-
     path = Path(__file__).parent / image_path
+    if not path.exists():
+        return
     with open(path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
 
-    # white overlay for light UI; switch to rgba(0,0,0,OPACITY) for a dark overlay
     st.markdown(
         f"""
         <style>
-        /* Background (image + white overlay) */
         [data-testid="stAppViewContainer"] {{
             background-image:
                 linear-gradient(rgba(255,255,255,{overlay_opacity}),
@@ -44,13 +56,9 @@ def set_background(image_path: str, overlay_opacity: float = 0.55):
             background-position: center center;
             background-attachment: fixed;
         }}
-
-        /* Make Streamlit header transparent so bg is visible */
         [data-testid="stHeader"] {{
             background: rgba(0,0,0,0);
         }}
-
-        /* Content cards for readability */
         .block-container {{
             background: rgba(255,255,255,0.85);
             border-radius: 14px;
@@ -58,8 +66,6 @@ def set_background(image_path: str, overlay_opacity: float = 0.55):
             box-shadow: 0 4px 20px rgba(0,0,0,0.08);
             backdrop-filter: blur(2px);
         }}
-
-        /* Sidebar as a softer card */
         [data-testid="stSidebar"] > div:first-child {{
             background: rgba(255,255,255,0.75);
             border-radius: 12px;
@@ -67,13 +73,9 @@ def set_background(image_path: str, overlay_opacity: float = 0.55):
             padding: 0.5rem;
             backdrop-filter: blur(2px);
         }}
-
-        /* Buttons look better on photos */
         .stButton>button {{
             box-shadow: 0 2px 8px rgba(0,0,0,0.12);
         }}
-
-        /* Mobile tweaks */
         @media (max-width: 768px) {{
           .block-container {{ background: rgba(255,255,255,0.92); }}
         }}
@@ -82,24 +84,60 @@ def set_background(image_path: str, overlay_opacity: float = 0.55):
         unsafe_allow_html=True,
     )
 
-# Store and retrieve the current user's role (default to Viewer)
-role = st.session_state.setdefault("user_role", "Viewer")
+def safe_filename(s: str, max_len: int = 150) -> str:
+    """Remove illegal filename characters and tidy whitespace."""
+    s = str(s)
+    s = re.sub(r'[\\/:*?"<>|]+', "-", s)
+    s = re.sub(r"\s+", " ", s).strip(" .-")
+    return s[:max_len]
 
-# Show manager-only controls
-if role == "Manager":
-    st.sidebar.button("Admin Settings", icon="⚙️")
+def normalize_date(d) -> str:
+    """Normalize date like '06/08/2025' -> '2025-08-06' (safe for logs etc.)."""
+    try:
+        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%Y-%m-%d")
+    except Exception:
+        return str(d).replace("/", "-").replace("\\", "-")
 
-overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
-set_background("bg.jpg", overlay)
+def format_date_title(d: str) -> str:
+    """Return dd.MM.YYYY for filenames like 04.08.2025."""
+    try:
+        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%d.%m.%Y")
+    except Exception:
+        return str(d).replace("/", ".").replace("-", ".")
 
-# ---- Styled header: WorkWatch — Site Intelligence · IRANZI ----
+# Proper resolve_asset with docstring correctly indented
+def resolve_asset(name: Optional[str]) -> Optional[str]:
+    """Find an asset (e.g., signature image) whether it's in ./ or ./signatures/,
+    with or without extension. Tries .png/.jpg/.jpeg/.webp. Returns an absolute path or None."""
+    if not name:
+        return None
 
+    p = (BASE_DIR / name).resolve()
+    stem = p.with_suffix("").name
+
+    # Where to look
+    if p.parent != BASE_DIR:
+        search_dirs = [p.parent]
+    else:
+        search_dirs = [BASE_DIR / "signatures", BASE_DIR]
+
+    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
+    for d in search_dirs:
+        for ext in exts:
+            candidate = (d / f"{stem}{ext}").resolve()
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+# -----------------------------
+# UI helpers
+# -----------------------------
 def render_workwatch_header(
     author: str = "IRANZI",
     brand: str = "WorkWatch",
     subtitle: str = "Site Intelligence",
-    logo_path: str | None = "ibc_logo.png",
-    tagline: str | None = "Field reports & weekly summaries"
+    logo_path: Optional[str] = "ibc_logo.png",
+    tagline: Optional[str] = "Field reports & weekly summaries",
 ):
     # embed logo if available
     logo_html = ""
@@ -150,242 +188,18 @@ def render_workwatch_header(
             </div>
             {f'<div class="ww-tagline">{tagline}</div>' if tagline else ''}
           </div>
-            img_width_mm = st.slider("Image width (mm)", min_value=30, max_value=100, value=70, step=5)
-            img_per_row = st.selectbox("Images per row", options=[1,2,3,4], index=1)
-            add_border = st.checkbox("Add border to images", value=False)
-            spacing_px = st.slider("Spacing between images (px)", min_value=0, max_value=40, value=8, step=2)
-
-render_workwatch_header(
-    author="IRANZI",
-    brand="WorkWatch",
-    subtitle="Site Intelligence",
-    logo_path="ibc_logo.png",          # or None to hide
-    tagline="Field reports & weekly summaries",
-)
-                            border_style = f"border:1px solid #888;" if add_border else ""
-                            spacing_style = f"margin-bottom:{spacing_px}px; margin-right:{spacing_px}px;"
-                            st.markdown(f"<div style='{border_style}{spacing_style}'>", unsafe_allow_html=True)
-                            st.image(img_file, width=int(img_width_mm*3.78))
-                            st.markdown("</div>", unsafe_allow_html=True)
-# -----------------------------
-BASE_DIR = Path(__file__).parent.resolve()
-
-# Column index (0-based) for the "Discipline" field in sheet rows.
-# Sheet structure: Date, Site_Name, District, Work, Human_Resources, Supply,
-# Work_Executed, Comment_on_work, Another_Work_Executed, Comment_on_HSE,
-# Consultant_Recommandation, Discipline
-DISCIPLINE_COL = 11
-
-
-def resolve_asset(name: Optional[str]) -> Optional[str]:
-"""Find an asset (e.g., signature image) whether it's in ./ or ./signatures/,
-    with or without extension. Tries .png/.jpg/.jpeg/.webp. Returns an absolute path or None."""
-    ...
-    if not name:
-        return None
-
-    p = (BASE_DIR / name).resolve()
-    stem = p.with_suffix("").name
-
-    # Where to look
-    if p.parent != BASE_DIR:
-        search_dirs = [p.parent]
-    else:
-        search_dirs = [BASE_DIR / "signatures", BASE_DIR]
-
-    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
-    for d in search_dirs:
-        for ext in exts:
-            candidate = (d / f"{stem}{ext}").resolve()
-            if candidate.exists():
-                return str(candidate)
-    return None
-
-def update_timesheet_template_by_discipline(template_path, all_rows, selected_dates, discipline):
-    wb = load_workbook(template_path)
-    try:
-        ws = wb.active
-
-        for date_str in selected_dates:
-            try:
-                day_num = int(pd.to_datetime(date_str, dayfirst=True).day)
-            except:
-                continue
-
-            # Filter rows by date AND discipline
-            day_rows = [
-                r for r in all_rows
-                if r[0] == date_str and st.session_state.get("discipline_radio") == discipline
-            ]
-
-
-
-
-            # Extract and merge activities
-            activities = []
-            for r in day_rows:
-                site = r[1]
-                act1 = r[6] or ""
-                act2 = r[8] or ""
-                combined = " / ".join(filter(None, [act1.strip(), act2.strip()]))
-                if combined:
-                    activities.append(f"{site}: {combined}")
-
-            # Fill Excel row for the matching day number
-            for row in range(19, 60):
-                cell_value = ws[f"A{row}"].value
-                if cell_value == day_num:
-                    ws[f"F{row}"] = ", ".join(sites)
-                    ws[f"G{row}"] = "\n".join(activities[:8]) or "Supervision of site activities"
-                    break
-
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        return output
-    finally:
-        wb.close()
-
-
-
-
-    tpl = DocxTemplate("Weekly_Report_Template.docx")
-
-    sites_ctx = []
-    total_man = 0
-    good_lines, bad_lines = [], []
-
-    # very light keyword heuristics for summary
-    def is_blocker(text):
-        t = (text or "").lower()
-        return any(k in t for k in ["delay", "blocked", "issue", "problem", "pending", "stoppage", "approval"])
-
-    for site, site_rows in sorted(by_site.items()):
-        # table Mon..Sun
-        table = build_site_table(site_rows)
-
-        # quick site narrative
-        act_lead = ", ".join({t["Description"] for t in table} or [])
-        narrative = f"During the week, activities at {site} included {act_lead.lower()}."
-
-        # simple challenges pulled from comments/recommendations
-        challenges = []
-        for r in site_rows:
-            combined = f"{r[7] or ''} {r[10] or ''}".strip()  # Comment_on_work + Consultant_Recommandation
-            if combined and is_blocker(combined):
-                challenges.append({"Issue": combined, "Impact": "Schedule impact"})
-
-        # pictures
-        pics = site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd)
-
-        # manpower sum from Human_Resources column (idx 4), best-effort integer extraction
-        site_man = 0
-        for r in site_rows:
-            m = re.search(r"\d+", str(r[4]) or "")
-            if m:
-                site_man += int(m.group())
-        total_man += site_man
-
-        sites_ctx.append({
-            "Site_Name": site,
-            "Narrative": narrative,
-            "Table": table,
-            "Challenges": challenges[:3],
-            "Pictures": pics
-        })
-
-        good_lines.extend([t["Description"] for t in table][:3])
-        bad_lines.extend([c["Issue"] for c in challenges][:3])
-
-    # summary paragraph
-    summary = f"This week, the {discipline.lower()} teams progressed across {len(sites_ctx)} site(s)."
-    if good_lines:
-        summary += " Key activities: " + ", ".join(sorted(set(good_lines))) + "."
-    if bad_lines:
-        summary += " Risks/Delays noted: " + "; ".join(sorted(set(bad_lines))) + "."
-
-    # signatures
-    sign = SIGNATORIES.get(discipline, {})
-    cons_sig_path = resolve_asset(sign.get("Consultant_Signature"))
-    cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-
-    ctx = {
-        "Week_No": f"{week_no:02d}",
-        "Period_From": start.strftime("%d/%m/%Y"),
-        "Period_To":   end.strftime("%d/%m/%Y"),
-        "Doc_No": f"{week_no:02d}",
-        "Doc_Date": pd.Timestamp.today().strftime("%d/%m/%Y"),
-        "Project_Name": "Consultancy services related to Supervision of Engineering Design Supply and Installation of 15kV Switching Substations and Rehabilitation of Associated Distribution Lines in Kigali",
-        "Prepared_By": sign.get("Consultant_Name", ""),
-        "Prepared_Signature": cons_sig_img,
-        "Discipline": discipline,
-        "Summary": summary,
-        "Sites": sites_ctx,
-        "Ongoing": [],   # fill from a 'Weekly_Log' sheet if you add one
-        "Planned": [],   # fill from a 'Weekly_Log' sheet if you add one
-        "HSE": "Teams maintained good safety standards this week.",
-        "Weekly_Images": tpl.new_subdoc(),  # or build a global gallery if you want
-    }
-    return tpl, ctx
-# ========= end weekly helpers =========
-
-    
-def normalize_date(d) -> str:
-    """Normalize date like '06/08/2025' -> '2025-08-06' (safe for logs etc.)."""
-    try:
-        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%Y-%m-%d")
-    except Exception:
-        return str(d).replace("/", "-").replace("\\", "-")
-
-
-def format_date_title(d: str) -> str:
-    """Return dd.MM.YYYY for filenames like 04.08.2025."""
-    try:
-        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%d.%m.%Y")
-    except Exception:
-        # Fallback: normalize common separators to dots
-        return str(d).replace("/", ".").replace("-", ".")
-
-
-def safe_filename(s: str, max_len: int = 150) -> str:
-    """Remove illegal filename characters and tidy whitespace."""
-    s = str(s)
-    s = re.sub(r'[\\/:*?"<>|]+', "-", s)  # illegal on Windows + unsafe elsewhere
-    s = re.sub(r"\s+", " ", s).strip(" .-")
-    return s[:max_len]
-
-
-def merge_daily_reports(files):
-    """Merge multiple daily report DOCX files into a single document with page breaks."""
-    if not files:
-        return None
-
-    merged_doc = Document(BytesIO(files[0].getvalue()))
-    for f in files[1:]:
-        doc = Document(BytesIO(f.getvalue()))
-        merged_doc.add_page_break()
-        for element in doc.element.body:
-            merged_doc.element.body.append(element)
-
-    output = BytesIO()
-    merged_doc.save(output)
-    output.seek(0)
-    return output
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # -----------------------------
-# App config & constants
+# Signatories & config
 # -----------------------------
-
-SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
-SHEET_NAME = "Reports"
-TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
-CACHE_FILE = BASE_DIR / "offline_cache.json"
-
 SIGNATORIES = {
     "Civil": {
         "Consultant_Name": "IRANZI Prince Jean Claude",
         "Consultant_Title": "Civil Engineer",
-        # Keep stems; resolver will find .jpg/.png in repo root or ./signatures
         "Consultant_Signature": "iranzi_prince_jean_claude",
         "Contractor_Name": "Issac HABIMANA",
         "Contractor_Title": "Electrical Engineer",
@@ -395,14 +209,14 @@ SIGNATORIES = {
         "Consultant_Name": "Alexis IVUGIZA",
         "Consultant_Title": "Electrical Engineer",
         "Consultant_Signature": "alexis_ivugiza",
-        "Contractor_Name": "Issac HABIMANA",  # say if you want 'Isaac'
+        "Contractor_Name": "Issac HABIMANA",
         "Contractor_Title": "Electrical Engineer",
         "Contractor_Signature": "issac_habimana",
     },
 }
 
 # -----------------------------
-# Google Sheets & offline cache
+# Google sheets helpers
 # -----------------------------
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -417,15 +231,13 @@ def _build_service():
 def get_sheet_data() -> list[list[str]]:
     service = _build_service()
     sheet = service.spreadsheets()
-
     result = sheet.values().get(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A:K",  # open-ended range
+        range=f"{SHEET_NAME}!A:K",
     ).execute()
     rows = result.get("values", [])
     padded_rows = [row + [""] * (11 - len(row)) for row in rows]
     return padded_rows
-
 
 def append_rows_to_sheet(rows: list[list[str]]):
     if not rows:
@@ -439,7 +251,6 @@ def append_rows_to_sheet(rows: list[list[str]]):
         body=body,
     ).execute()
 
-
 def load_offline_cache():
     if CACHE_FILE.exists():
         try:
@@ -448,7 +259,6 @@ def load_offline_cache():
         except Exception:
             return None
     return None
-
 
 def save_offline_cache(rows, uploads):
     data = {
@@ -467,17 +277,40 @@ def save_offline_cache(rows, uploads):
     with open(CACHE_FILE, "w") as fh:
         json.dump(data, fh)
 
-
 def get_unique_sites_and_dates(rows: list[list[str]]):
     sites = sorted({row[1].strip() for row in rows if len(row) > 1 and row[1].strip()})
     dates = sorted({row[0].strip() for row in rows if len(row) > 0 and row[0].strip()})
     return sites, dates
 
 # -----------------------------
-# UI
+# Streamlit app UI
 # -----------------------------
 st.title("📑 Site Daily Report Generator (Pro)")
 
+# role
+role = st.session_state.setdefault("user_role", "Viewer")
+if role == "Manager":
+    st.sidebar.button("Admin Settings", icon="⚙️")
+
+overlay = st.sidebar.slider("🖼️ Background overlay", 0.0, 1.0, 0.55, 0.05)
+set_background("bg.jpg", overlay)
+
+render_workwatch_header(
+    author="IRANZI",
+    brand="WorkWatch",
+    subtitle="Site Intelligence",
+    logo_path="ibc_logo.png",
+    tagline="Field reports & weekly summaries",
+)
+
+# Controls that were mistakenly embedded in HTML in original file:
+st.sidebar.subheader("Gallery Controls")
+img_width_mm = st.sidebar.slider("Image width (mm)", min_value=30, max_value=100, value=70, step=5)
+img_per_row = st.sidebar.selectbox("Images per row", options=[1,2,3,4], index=1)
+add_border = st.sidebar.checkbox("Add border to images", value=False)
+spacing_mm = st.sidebar.slider("Spacing between images (mm)", min_value=0, max_value=20, value=2, step=1)
+
+# Get sheet data
 cache = load_offline_cache()
 if cache and cache.get("rows"):
     st.info("Cached offline data detected. Use the button below to sync back to the Google Sheet.")
@@ -532,15 +365,12 @@ filtered_rows = [
     if row[1].strip() in selected_sites and row[0].strip() in selected_dates
 ]
 
-# (site, date) pairs for upload mapping
 site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
-# Uploads mapping
 uploaded_image_mapping: dict[tuple[str, str], list] = {}
 
 # Preview
 st.subheader("Preview Reports to be Generated")
-show_dashboard = st.checkbox("Show Dashboard")
 df_preview = pd.DataFrame(
     filtered_rows,
     columns=[
@@ -551,6 +381,8 @@ df_preview = pd.DataFrame(
 )
 st.dataframe(df_preview, use_container_width=True, hide_index=True)
 
+# Dashboard toggle
+show_dashboard = st.checkbox("Show Dashboard")
 if show_dashboard:
     dash_df = df_preview.copy()
     dash_df = dash_df[dash_df["Site_Name"].isin(selected_sites)]
@@ -571,15 +403,8 @@ if show_dashboard:
                 dash_df.sort_values("Date").set_index("Date")["Work_Executed"]
             )
 
-# Image uploads
-
-# Gallery preview and customization controls
+# Image upload UI
 st.subheader("Gallery Preview & Customization")
-img_width_mm = st.slider("Image width (mm)", min_value=30, max_value=100, value=70, step=5)
-img_per_row = st.selectbox("Images per row", options=[1,2,3,4], index=1)
-add_border = st.checkbox("Add border to images", value=False)
-spacing_mm = st.slider("Spacing between images (mm)", min_value=0, max_value=20, value=2, step=1)
-
 for site_name, date in site_date_pairs:
     image_files = uploaded_image_mapping.get((site_name, date), []) or []
     if image_files:
@@ -591,25 +416,23 @@ for site_name, date in site_date_pairs:
                 if add_border:
                     st.markdown("<div style='border:1px solid #888; margin-bottom:5px;'></div>", unsafe_allow_html=True)
 
-# Image uploads
 if site_date_pairs:
     for site_name, date in site_date_pairs:
         with st.expander(f"Upload Images for {site_name} ({date})"):
             imgs = st.file_uploader(
                 f"Images for {site_name} ({date})",
                 accept_multiple_files=True,
-                key=f"uploader_{site_name}_{date}",
+                key=f"uploader_{safe_filename(site_name)}_{safe_filename(date)}",
             )
             uploaded_image_mapping[(site_name, date)] = imgs
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
 
-
 # -----------------------------
 # Generate reports
 # -----------------------------
 if st.button("🚀 Generate & Download All Reports"):
-    with st.spinner("Generating reports, please wait..."):
+    with st.spinner("Generating reports..."):
         zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
             for row in filtered_rows:
@@ -625,64 +448,71 @@ if st.button("🚀 Generate & Download All Reports"):
                 image_files = uploaded_image_mapping.get((site_name, date), []) or []
                 images_subdoc = tpl.new_subdoc()
                 row_cells = []
+
+                # Build rows of images (simple implementation)
                 for idx, img_file in enumerate(image_files):
+                    # write temp file
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
                         tmp_img.write(img_file.getbuffer())
                         tmp_img.flush()
                         row_cells.append(tmp_img.name)
-                    # Add images per row
+
                     if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
                         table = images_subdoc.add_table(rows=1, cols=img_per_row)
-                        for col_idx, img_path in enumerate(row_cells):
+                        for col_idx in range(img_per_row):
                             cell = table.rows[0].cells[col_idx]
-                            run = cell.paragraphs[0].add_run()
-                            run.add_picture(img_path, width=Mm(img_width_mm))
-                            if add_border:
-                                run.font.color.rgb = None
-                                cell._element.get_or_add_tcPr().append(
-                                    tpl.docx._element.makeelement('w:tcBorders')
-                                )
-                            # Add spacing (not natively supported, but can add empty paragraphs)
-                            for _ in range(spacing_mm // 2):
-                                cell.paragraphs[0].add_run().add_text("\u2003")
-                            os.remove(img_path)
+                            if col_idx < len(row_cells):
+                                img_path = row_cells[col_idx]
+                                run = cell.paragraphs[0].add_run()
+                                run.add_picture(img_path, width=Mm(img_width_mm))
+                                # optionally add border (simple approach)
+                                if add_border:
+                                    from docx.oxml import parse_xml
+                                    borders_xml = """
+                                    <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
+                                        <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                        <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                        <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                        <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    </w:tcBorders>
+                                    """
+                                    tcPr = cell._element.get_or_add_tcPr()
+                                    tcPr.append(parse_xml(borders_xml))
+                                try:
+                                    os.remove(img_path)
+                                except Exception:
+                                    pass
                         row_cells = []
 
-                # Signatories (names/titles + signatures)
+                # Signatures
                 sign_info = SIGNATORIES.get(discipline, {})
                 cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
                 cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
                 cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
                 cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
 
-                # Context for DOCX
-                row_cells = []
-                for idx, img_file in enumerate(image_files):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
-                        tmp_img.write(img_file.getbuffer())
-                        tmp_img.flush()
-                        row_cells.append(tmp_img.name)
-                    # Add images per row
-                    if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
-                        table = images_subdoc.add_table(rows=1, cols=img_per_row)
-                        for col_idx, img_path in enumerate(row_cells):
-                            cell = table.rows[0].cells[col_idx]
-                            run = cell.paragraphs[0].add_run()
-                            run.add_picture(img_path, width=Mm(img_width_mm))
-                            if add_border:
-                                tcPr = cell._element.get_or_add_tcPr()
-                                borders_xml = """
-                                <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
-                                    <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                </w:tcBorders>
-                                """
-                                from docx.oxml import parse_xml
-                                tcPr.append(parse_xml(borders_xml))
-                            os.remove(img_path)
-                        row_cells = []
+                # Build context (you will need to adapt to your docx template variables)
+                ctx = {
+                    "Date": date,
+                    "Site_Name": site_name,
+                    "District": district,
+                    "Work": work,
+                    "Human_Resources": human_resources,
+                    "Supply": supply,
+                    "Work_Executed": work_executed,
+                    "Comment_on_work": comment_on_work,
+                    "Another_Work_Executed": another_work_executed,
+                    "Comment_on_HSE": comment_on_hse,
+                    "Consultant_Recommandation": consultant_recommandation,
+                    "Prepared_Signature": cons_sig_img,
+                    "Contractor_Signature": cont_sig_img,
+                    "Gallery": images_subdoc,
+                }
+
+                tpl.render(ctx)
+
+                # produce a filename and write into zip
+                out_name = safe_filename(f"{site_name}_{format_date_title(date)}.docx")
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
                     tpl.save(tmp_docx.name)
                     zipf.write(tmp_docx.name, arcname=out_name)
