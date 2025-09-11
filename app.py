@@ -200,20 +200,21 @@ SIGNATORIES = {
     "Civil": {
         "Consultant_Name": "IRANZI Prince Jean Claude",
         "Consultant_Title": "Civil Engineer",
-        "Consultant_Signature": "iranzi_prince_jean_claude",
+        "Consultant_Signature": "iranzi_prince_jean_claude.jpg",  # full name with extension
         "Contractor_Name": "Issac HABIMANA",
         "Contractor_Title": "Electrical Engineer",
-        "Contractor_Signature": "issac_habimana",
+        "Contractor_Signature": "issac_habimana.jpg",  # full name
     },
     "Electrical": {
         "Consultant_Name": "Alexis IVUGIZA",
         "Consultant_Title": "Electrical Engineer",
-        "Consultant_Signature": "alexis_ivugiza",
+        "Consultant_Signature": "alexis_ivugiza.jpg",
         "Contractor_Name": "Issac HABIMANA",
         "Contractor_Title": "Electrical Engineer",
-        "Contractor_Signature": "issac_habimana",
+        "Contractor_Signature": "issac_habimana.jpg",
     },
-}
+},
+
 
 # -----------------------------
 # Google sheets helpers
