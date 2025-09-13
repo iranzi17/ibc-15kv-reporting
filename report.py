@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import streamlit as st
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
@@ -98,10 +99,24 @@ def generate_reports(
                 work_executed, comment_on_work, another_work_executed,
                 comment_on_hse, consultant_recommandation
             ) = (row + [""] * 11)[:11]
-            date = date.strip()
             site_name = site_name.strip()
+            date = date.strip()
 
             tpl = DocxTemplate(template_path)
+            required = {
+                "Consultant_Name",
+                "Consultant_Title",
+                "Consultant_Signature",
+                "Contractor_Name",
+                "Contractor_Title",
+                "Contractor_Signature",
+            }
+            placeholders = tpl.get_undeclared_template_variables({})
+            missing = required - placeholders
+            if missing:
+                st.warning(
+                    "Template is missing placeholders: " + ", ".join(sorted(missing))
+                )
 
             image_files = uploaded_image_mapping.get((site_name, date), []) or []
             images_subdoc = tpl.new_subdoc()
