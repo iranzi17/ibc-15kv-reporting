@@ -10,6 +10,7 @@ from sheets import (
 )
 
 from ui import render_workwatch_header, set_background
+from report import generate_reports
 
 
 def run_app():
@@ -100,6 +101,29 @@ def run_app():
         ],
     )
     st.dataframe(df_preview)
+
+    discipline = st.radio("Discipline", ["Civil", "Electrical"], key="discipline_radio")
+
+    for site, date in site_date_pairs:
+        files = st.file_uploader(
+            f"Upload images for {site} - {date}",
+            accept_multiple_files=True,
+            type=["png", "jpg", "jpeg", "webp"],
+            key=f"uploader_{site}_{date}",
+        )
+        if files:
+            uploaded_image_mapping[(site.strip(), date.strip())] = files
+
+    if st.button("Generate Reports"):
+        zip_bytes = generate_reports(
+            filtered_rows,
+            uploaded_image_mapping,
+            discipline,
+            img_width_mm,
+            img_per_row,
+            add_border,
+        )
+        st.download_button("Download ZIP", zip_bytes, "reports.zip")
 
 
 if __name__ == "__main__":
