@@ -86,8 +86,8 @@ def generate_reports(
     uploaded_image_mapping: Dict[tuple, List[bytes]],
     discipline: str,
     img_width_mm: int,
-    img_per_row: int,
-    add_border: bool,
+    img_per_row: int = 2,
+    add_border: bool = False,
     template_path: str = TEMPLATE_PATH,
 ) -> bytes:
     """Create a ZIP archive of rendered DOCX reports."""
@@ -103,6 +103,10 @@ def generate_reports(
             date = date.strip()
 
             tpl = DocxTemplate(template_path)
+            section = tpl.get_docx().sections[0]
+            usable_w = section.page_width.mm - section.left_margin.mm - section.right_margin.mm
+            usable_h = section.page_height.mm - section.top_margin.mm - section.bottom_margin.mm
+            half_w, half_h = usable_w / 2, usable_h / 2
             required = {
                 "Consultant_Name",
                 "Consultant_Title",
@@ -133,7 +137,7 @@ def generate_reports(
                         if col_idx < len(row_cells):
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
-                            run.add_picture(img_path, width=Mm(img_width_mm))
+                            run.add_picture(img_path, width=Mm(half_w), height=Mm(half_h))
                             if add_border:
                                 from docx.oxml import parse_xml
 
@@ -152,6 +156,8 @@ def generate_reports(
                             except Exception:
                                 pass
                     row_cells = []
+                    if (idx + 1) % (img_per_row * 2) == 0 and idx != len(image_bytes) - 1:
+                        images_subdoc.add_page_break()
 
             sign_info = SIGNATORIES.get(discipline, {})
             cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
