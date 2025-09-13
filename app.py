@@ -143,4 +143,3 @@ if site_date_pairs:
                     st.warning(f"Skipping invalid file: {img_file.name}")
             uploaded_image_mapping[(site_name, date)] = valid_imgs
 else:
-    st.info("No site/date pairs in current filter. Adjust filters to upload images.")
