@@ -1,4 +1,4 @@
-from app import SIGNATORIES
+from report import SIGNATORIES
 
 
 def test_context_includes_signatory_fields():
