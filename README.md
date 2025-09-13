@@ -19,6 +19,31 @@ GOOGLE_CREDENTIALS = """
 The credentials are parsed with `json.loads(st.secrets["GOOGLE_CREDENTIALS"])`
 when the app starts.
 
+## Configuration
+
+Application settings can be supplied through environment variables or by
+placing a `config.json` or `config.toml` file in the project root.  A custom
+configuration file path may also be provided via the `APP_CONFIG` environment
+variable.  Settings from environment variables take precedence over values from
+the configuration file.
+
+Supported options:
+
+| Name | Description | Default |
+| ---- | ----------- | ------- |
+| `TEMPLATE_PATH` | Path to the Word report template used when generating documents. | `Site_Daily_report_Template_Date.docx` |
+| `SHEET_ID` | ID of the Google Sheet that stores report data. | `1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI` |
+| `SHEET_NAME` | Worksheet within the Google Sheet from which to read data. | `Reports` |
+| `CACHE_FILE` | File used to cache offline data before syncing. | `offline_cache.json` in the project directory |
+| `DISCIPLINE_COL` | Column number for the "Discipline" field in the sheet. | `11` |
+
+Example `config.toml`:
+
+```toml
+SHEET_ID = "your-google-sheet-id"
+SHEET_NAME = "Reports"
+```
+
 ## Google Sheet Setup
 
 The app expects data in a Google Sheet named **Reports**. Columns **A** through
