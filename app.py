@@ -2,15 +2,8 @@ import pandas as pd
 import streamlit as st
 
 
-from ui import render_workwatch_header, set_background
-from sheets import (
-    append_rows_to_sheet,
-    get_sheet_data,
-    get_unique_sites_and_dates,
-    load_offline_cache,
-    save_offline_cache,
-)
-from report import generate_reports, safe_filename
+
+
 
 st.title("📑 Site Daily Report Generator (Pro)")
 
@@ -86,7 +79,7 @@ df_preview = pd.DataFrame(
         "Date", "Site_Name", "District", "Work", "Human_Resources", "Supply",
         "Work_Executed", "Comment_on_work", "Another_Work_Executed",
         "Comment_on_HSE", "Consultant_Recommandation",
-    ],
+    ][:NUM_COLUMNS],
 )
 st.dataframe(df_preview, use_container_width=True, hide_index=True)
 
