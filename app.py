@@ -222,7 +222,17 @@ SIGNATORIES = {
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 def _build_service():
-    service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    try:
+        creds_json = st.secrets["GOOGLE_CREDENTIALS"]
+    except KeyError:
+        st.error("Google credentials not found in Streamlit secrets")
+        return None
+    try:
+        service_account_info = json.loads(creds_json)
+    except json.JSONDecodeError:
+        st.error("Invalid Google credentials JSON in Streamlit secrets")
+        return None
+
     creds = service_account.Credentials.from_service_account_info(
         service_account_info, scopes=SCOPES
     )
@@ -231,6 +241,8 @@ def _build_service():
 @st.cache_data(ttl=300)
 def get_sheet_data() -> list[list[str]]:
     service = _build_service()
+    if service is None:
+        return []
     sheet = service.spreadsheets()
     result = sheet.values().get(
         spreadsheetId=SHEET_ID,
@@ -244,6 +256,8 @@ def append_rows_to_sheet(rows: list[list[str]]):
     if not rows:
         return
     service = _build_service()
+    if service is None:
+        return
     body = {"values": rows}
     service.spreadsheets().values().append(
         spreadsheetId=SHEET_ID,
