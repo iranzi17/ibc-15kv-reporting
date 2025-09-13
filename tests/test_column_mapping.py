@@ -1,10 +1,13 @@
 import pytest
 
+from sheets import get_unique_sites_and_dates
 
 
 def test_column_mapping_order():
     rows = [
-      
+        ["2024-01-01", "Site A"],
+        ["2024-01-02", "Site B"],
+        ["2024-01-03", "Site A"],
     ]
 
     sites, dates = get_unique_sites_and_dates(rows)
