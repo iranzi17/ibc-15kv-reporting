@@ -177,7 +177,7 @@ def generate_reports(
                 "Contractor_Title": sign_info.get("Contractor_Title", ""),
                 "Consultant_Signature": cons_sig_img,
                 "Contractor_Signature": cont_sig_img,
-                "Gallery": images_subdoc,
+                "Images": images_subdoc,
             }
 
             tpl.render(ctx)
