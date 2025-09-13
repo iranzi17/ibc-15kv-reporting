@@ -454,81 +454,79 @@ if st.button("🚀 Generate & Download All Reports"):
 
                 # Images from uploader → put each photo in a subdocument paragraph with custom styling
                 image_files = uploaded_image_mapping.get((site_name, date), []) or []
-                images_subdoc = tpl.new_subdoc()
-                row_cells = []
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    images_subdoc = tpl.new_subdoc()
+                    row_cells = []
 
-                # Build rows of images (simple implementation)
-                for idx, img_file in enumerate(image_files):
-                    # write temp file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
-                        tmp_img.write(img_file.getbuffer())
-                        tmp_img.flush()
-                        row_cells.append(tmp_img.name)
+                    # Build rows of images (simple implementation)
+                    for idx, img_file in enumerate(image_files):
+                        suffix = Path(img_file.name).suffix or ".img"
+                        rel_name = f"img_{idx}{suffix}"
+                        img_path = Path(tmp_dir) / rel_name
+                        with open(img_path, "wb") as tmp_img:
+                            tmp_img.write(img_file.getbuffer())
+                        row_cells.append(rel_name)
 
-                    if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
-                        table = images_subdoc.add_table(rows=1, cols=img_per_row)
-                        for col_idx in range(img_per_row):
-                            cell = table.rows[0].cells[col_idx]
-                            if col_idx < len(row_cells):
-                                img_path = row_cells[col_idx]
-                                run = cell.paragraphs[0].add_run()
-                                run.add_picture(img_path, width=Mm(img_width_mm))
-                                # optionally add border (simple approach)
-                                if add_border:
-                                    from docx.oxml import parse_xml
-                                    borders_xml = """
-                                    <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
-                                        <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                        <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                        <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                        <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    </w:tcBorders>
-                                    """
-                                    tcPr = cell._element.get_or_add_tcPr()
-                                    tcPr.append(parse_xml(borders_xml))
-                                try:
-                                    os.remove(img_path)
-                                except Exception:
-                                    pass
-                        row_cells = []
+                        if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
+                            table = images_subdoc.add_table(rows=1, cols=img_per_row)
+                            for col_idx in range(img_per_row):
+                                cell = table.rows[0].cells[col_idx]
+                                if col_idx < len(row_cells):
+                                    img_rel = row_cells[col_idx]
+                                    img_full_path = Path(tmp_dir) / img_rel
+                                    run = cell.paragraphs[0].add_run()
+                                    run.add_picture(str(img_full_path), width=Mm(img_width_mm))
+                                    # optionally add border (simple approach)
+                                    if add_border:
+                                        from docx.oxml import parse_xml
+                                        borders_xml = """
+                                        <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
+                                            <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                            <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                            <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                            <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                        </w:tcBorders>
+                                        """
+                                        tcPr = cell._element.get_or_add_tcPr()
+                                        tcPr.append(parse_xml(borders_xml))
+                            row_cells = []
 
-                # Signatures
-                sign_info = SIGNATORIES.get(discipline, {})
-                cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
-                cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
-                cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-                cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+                    # Signatures
+                    sign_info = SIGNATORIES.get(discipline, {})
+                    cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+                    cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+                    cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+                    cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
 
-                # Build context (you will need to adapt to your docx template variables)
-                ctx = {
-                    "Date": date,
-                    "Site_Name": site_name,
-                    "District": district,
-                    "Work": work,
-                    "Human_Resources": human_resources,
-                    "Supply": supply,
-                    "Work_Executed": work_executed,
-                    "Comment_on_work": comment_on_work,
-                    "Another_Work_Executed": another_work_executed,
-                    "Comment_on_HSE": comment_on_hse,
-                    "Consultant_Recommandation": consultant_recommandation,
-                    "Consultant_Name": sign_info.get("Consultant_Name", ""),
-                    "Consultant_Title": sign_info.get("Consultant_Title", ""),
-                    "Contractor_Name": sign_info.get("Contractor_Name", ""),
-                    "Contractor_Title": sign_info.get("Contractor_Title", ""),
-                    "Consultant_Signature": cons_sig_img,
-                    "Contractor_Signature": cont_sig_img,
-                    "Gallery": images_subdoc,
-                }
+                    # Build context (you will need to adapt to your docx template variables)
+                    ctx = {
+                        "Date": date,
+                        "Site_Name": site_name,
+                        "District": district,
+                        "Work": work,
+                        "Human_Resources": human_resources,
+                        "Supply": supply,
+                        "Work_Executed": work_executed,
+                        "Comment_on_work": comment_on_work,
+                        "Another_Work_Executed": another_work_executed,
+                        "Comment_on_HSE": comment_on_hse,
+                        "Consultant_Recommandation": consultant_recommandation,
+                        "Consultant_Name": sign_info.get("Consultant_Name", ""),
+                        "Consultant_Title": sign_info.get("Consultant_Title", ""),
+                        "Contractor_Name": sign_info.get("Contractor_Name", ""),
+                        "Contractor_Title": sign_info.get("Contractor_Title", ""),
+                        "Consultant_Signature": cons_sig_img,
+                        "Contractor_Signature": cont_sig_img,
+                        "Gallery": images_subdoc,
+                    }
 
-                tpl.render(ctx)
+                    tpl.render(ctx)
 
-                # produce a filename and write into zip
-                out_name = safe_filename(f"{site_name}_{format_date_title(date)}.docx")
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
-                    tpl.save(tmp_docx.name)
-                    zipf.write(tmp_docx.name, arcname=out_name)
-                    os.remove(tmp_docx.name)
+                    # produce a filename and write into zip
+                    out_name = safe_filename(f"{site_name}_{format_date_title(date)}.docx")
+                    docx_path = Path(tmp_dir) / "report.docx"
+                    tpl.save(docx_path)
+                    zipf.write(docx_path, arcname=out_name)
 
         zip_buffer.flush()
         zip_buffer.seek(0)
