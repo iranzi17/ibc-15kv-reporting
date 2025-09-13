@@ -1,4 +1,5 @@
 import pytest
+from app import NUM_COLUMNS
 
 
 def extract_sites_dates(rows):
@@ -9,9 +10,9 @@ def extract_sites_dates(rows):
 
 def test_column_mapping_order():
     rows = [
-        ["Site A", "2024-01-01", "", "", "", ""],
-        ["Site B", "2024-01-02", "", "", "", ""],
-        ["Site A", "2024-01-03", "", "", "", ""],
+        ["Site A", "2024-01-01"] + [""] * (NUM_COLUMNS - 2),
+        ["Site B", "2024-01-02"] + [""] * (NUM_COLUMNS - 2),
+        ["Site A", "2024-01-03"] + [""] * (NUM_COLUMNS - 2),
     ]
 
     sites, dates = extract_sites_dates(rows)

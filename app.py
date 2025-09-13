@@ -28,6 +28,7 @@ SHEET_NAME = "Reports"
 CACHE_FILE = BASE_DIR / "offline_cache.json"
 
 DISCIPLINE_COL = 11  # (kept from original)
+NUM_COLUMNS = 11
 
 # -----------------------------
 # Utility functions
@@ -237,7 +238,7 @@ def get_sheet_data() -> list[list[str]]:
         range=f"{SHEET_NAME}!A:K",
     ).execute()
     rows = result.get("values", [])
-    padded_rows = [row + [""] * (11 - len(row)) for row in rows]
+    padded_rows = [row + [""] * (NUM_COLUMNS - len(row)) for row in rows]
     return padded_rows
 
 def append_rows_to_sheet(rows: list[list[str]]):
@@ -378,7 +379,7 @@ df_preview = pd.DataFrame(
         "Date", "Site_Name", "District", "Work", "Human_Resources", "Supply",
         "Work_Executed", "Comment_on_work", "Another_Work_Executed",
         "Comment_on_HSE", "Consultant_Recommandation",
-    ],
+    ][:NUM_COLUMNS],
 )
 st.dataframe(df_preview, use_container_width=True, hide_index=True)
 
@@ -445,7 +446,7 @@ if st.button("🚀 Generate & Download All Reports"):
                     date, site_name, district, work, human_resources, supply,
                     work_executed, comment_on_work, another_work_executed,
                     comment_on_hse, consultant_recommandation
-                ) = (row + [""] * 11)[:11]
+                ) = (row + [""] * NUM_COLUMNS)[:NUM_COLUMNS]
 
                 date = date.strip()
                 site_name = site_name.strip()
