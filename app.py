@@ -311,19 +311,6 @@ img_per_row = st.sidebar.selectbox("Images per row", options=[1,2,3,4], index=1)
 add_border = st.sidebar.checkbox("Add border to images", value=False)
 spacing_mm = st.sidebar.slider("Spacing between images (mm)", min_value=0, max_value=20, value=2, step=1)
 
-# Get sheet data
-cache = load_offline_cache()
-if cache and cache.get("rows"):
-    st.info("Cached offline data detected. Use the button below to sync back to the Google Sheet.")
-    if st.button("Sync cached data to Google Sheet"):
-        try:
-            append_rows_to_sheet(cache.get("rows", []))
-            CACHE_FILE.unlink()
-            st.success("Cached data synced to Google Sheet.")
-            cache = None
-        except Exception as e:
-            st.error(f"Sync failed: {e}")
-
 try:
     rows = get_sheet_data()
 except Exception as e:
@@ -432,6 +419,21 @@ if site_date_pairs:
             uploaded_image_mapping[(site_name, date)] = imgs
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
+
+cache = load_offline_cache()
+if cache and cache.get("rows"):
+    st.info("Cached offline data detected. Use the button below to sync back to the Google Sheet.")
+    if st.button("Sync cached data to Google Sheet"):
+        try:
+            append_rows_to_sheet(cache.get("rows", []))
+            if CACHE_FILE.exists():
+                CACHE_FILE.unlink()
+            st.success("Cached data synced to Google Sheet.")
+            cache = None
+        except Exception as e:
+            st.error(f"Sync failed: {e}")
+            if offline_enabled:
+                save_offline_cache(filtered_rows, uploaded_image_mapping)
 
 # -----------------------------
 # Generate reports
