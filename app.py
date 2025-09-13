@@ -50,24 +50,32 @@ def run_app():
         rows = get_sheet_data()
         sites, _ = get_unique_sites_and_dates(rows)
 
-        st.header("Select Sites")
-        site_choices = ["All Sites"] + sites
-        selected_sites = st.multiselect(
-            "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
-        )
-        if "All Sites" in selected_sites or not selected_sites:
-            selected_sites = sites
+        col_left, col_right = st.columns([1, 2])
 
-        st.header("Select Dates")
-        site_dates = sorted(
-            {row[0].strip() for row in rows if row[1].strip() in selected_sites}
-        )
-        date_choices = ["All Dates"] + site_dates
-        selected_dates = st.multiselect(
-            "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
-        )
-        if "All Dates" in selected_dates or not selected_dates:
-            selected_dates = site_dates
+        with col_left:
+            discipline = st.radio(
+                "Discipline", ["Civil", "Electrical"], key="discipline_radio"
+            )
+
+        with col_right:
+            st.header("Select Sites")
+            site_choices = ["All Sites"] + sites
+            selected_sites = st.multiselect(
+                "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
+            )
+            if "All Sites" in selected_sites or not selected_sites:
+                selected_sites = sites
+
+            st.header("Select Dates")
+            site_dates = sorted(
+                {row[0].strip() for row in rows if row[1].strip() in selected_sites}
+            )
+            date_choices = ["All Dates"] + site_dates
+            selected_dates = st.multiselect(
+                "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
+            )
+            if "All Dates" in selected_dates or not selected_dates:
+                selected_dates = site_dates
     except Exception as e:  # pragma: no cover - user notification
         st.error(f"Failed to load site data: {e}")
         return
@@ -101,8 +109,6 @@ def run_app():
         ],
     )
     st.dataframe(df_preview)
-
-    discipline = st.radio("Discipline", ["Civil", "Electrical"], key="discipline_radio")
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
