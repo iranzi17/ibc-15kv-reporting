@@ -1,0 +1,175 @@
+import os
+import tempfile
+import zipfile
+from io import BytesIO
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from docxtpl import DocxTemplate, InlineImage
+from docx.shared import Mm
+
+BASE_DIR = Path(__file__).parent.resolve()
+TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
+
+SIGNATORIES = {
+    "Civil": {
+        "Consultant_Name": "IRANZI Prince Jean Claude",
+        "Consultant_Title": "Civil Engineer",
+        "Consultant_Signature": "iranzi_prince_jean_claude.jpg",
+        "Contractor_Name": "Issac HABIMANA",
+        "Contractor_Title": "Electrical Engineer",
+        "Contractor_Signature": "issac_habimana.jpg",
+    },
+    "Electrical": {
+        "Consultant_Name": "Alexis IVUGIZA",
+        "Consultant_Title": "Electrical Engineer",
+        "Consultant_Signature": "alexis_ivugiza.jpg",
+        "Contractor_Name": "Issac HABIMANA",
+        "Contractor_Title": "Electrical Engineer",
+        "Contractor_Signature": "issac_habimana.jpg",
+    },
+}
+
+
+def safe_filename(s: str, max_len: int = 150) -> str:
+    """Remove illegal filename characters and tidy whitespace."""
+    import re
+
+    s = str(s)
+    s = re.sub(r'[\\/:*?"<>|]+', "-", s)
+    s = re.sub(r"\s+", " ", s).strip(" .-")
+    return s[:max_len]
+
+
+def normalize_date(d) -> str:
+    """Normalize date like '06/08/2025' -> '2025-08-06'."""
+    import pandas as pd
+
+    try:
+        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%Y-%m-%d")
+    except Exception:
+        return str(d).replace("/", "-").replace("\\", "-")
+
+
+def format_date_title(d: str) -> str:
+    """Return dd.MM.YYYY for filenames like 04.08.2025."""
+    import pandas as pd
+
+    try:
+        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%d.%m.%Y")
+    except Exception:
+        return str(d).replace("/", ".").replace("-", ".")
+
+
+def resolve_asset(name: Optional[str]) -> Optional[str]:
+    """Find an asset whether it's in ./ or ./signatures/, with or without extension."""
+    if not name:
+        return None
+    p = (BASE_DIR / name).resolve()
+    stem = p.with_suffix("").name
+    if p.parent != BASE_DIR:
+        search_dirs = [p.parent]
+    else:
+        search_dirs = [BASE_DIR / "signatures", BASE_DIR]
+    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
+    for d in search_dirs:
+        for ext in exts:
+            candidate = d / f"{stem}{ext}"
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
+def generate_reports(
+    filtered_rows: List[List[str]],
+    uploaded_image_mapping: Dict[tuple, List],
+    discipline: str,
+    img_width_mm: int,
+    img_per_row: int,
+    add_border: bool,
+    template_path: str = TEMPLATE_PATH,
+) -> bytes:
+    """Create a ZIP archive of rendered DOCX reports."""
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zipf:
+        for row in filtered_rows:
+            (
+                date, site_name, district, work, human_resources, supply,
+                work_executed, comment_on_work, another_work_executed,
+                comment_on_hse, consultant_recommandation
+            ) = (row + [""] * 11)[:11]
+            date = date.strip()
+            site_name = site_name.strip()
+
+            tpl = DocxTemplate(template_path)
+
+            image_files = uploaded_image_mapping.get((site_name, date), []) or []
+            images_subdoc = tpl.new_subdoc()
+            row_cells = []
+            for idx, img_file in enumerate(image_files):
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
+                    tmp_img.write(img_file.getbuffer())
+                    tmp_img.flush()
+                    row_cells.append(tmp_img.name)
+                if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
+                    table = images_subdoc.add_table(rows=1, cols=img_per_row)
+                    for col_idx in range(img_per_row):
+                        cell = table.rows[0].cells[col_idx]
+                        if col_idx < len(row_cells):
+                            img_path = row_cells[col_idx]
+                            run = cell.paragraphs[0].add_run()
+                            run.add_picture(img_path, width=Mm(img_width_mm))
+                            if add_border:
+                                from docx.oxml import parse_xml
+
+                                borders_xml = """
+                                <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
+                                    <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                </w:tcBorders>
+                                """
+                                tcPr = cell._element.get_or_add_tcPr()
+                                tcPr.append(parse_xml(borders_xml))
+                            try:
+                                os.remove(img_path)
+                            except Exception:
+                                pass
+                    row_cells = []
+
+            sign_info = SIGNATORIES.get(discipline, {})
+            cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+            cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+            cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+            cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+
+            ctx = {
+                "Date": date,
+                "Site_Name": site_name,
+                "District": district,
+                "Work": work,
+                "Human_Resources": human_resources,
+                "Supply": supply,
+                "Work_Executed": work_executed,
+                "Comment_on_work": comment_on_work,
+                "Another_Work_Executed": another_work_executed,
+                "Comment_on_HSE": comment_on_hse,
+                "Consultant_Recommandation": consultant_recommandation,
+                "Consultant_Name": sign_info.get("Consultant_Name", ""),
+                "Consultant_Title": sign_info.get("Consultant_Title", ""),
+                "Contractor_Name": sign_info.get("Contractor_Name", ""),
+                "Contractor_Title": sign_info.get("Contractor_Title", ""),
+                "Consultant_Signature": cons_sig_img,
+                "Contractor_Signature": cont_sig_img,
+                "Gallery": images_subdoc,
+            }
+
+            tpl.render(ctx)
+            out_name = safe_filename(f"{site_name}_{format_date_title(date)}.docx")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
+                tpl.save(tmp_docx.name)
+                zipf.write(tmp_docx.name, arcname=out_name)
+                os.remove(tmp_docx.name)
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
