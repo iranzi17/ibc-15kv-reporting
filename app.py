@@ -17,17 +17,19 @@ from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from docx import Document
 from openpyxl import load_workbook
+from config import (
+    BASE_DIR,
+    TEMPLATE_PATH,
+    SHEET_ID,
+    SHEET_NAME,
+    CACHE_FILE,
+    DISCIPLINE_COL,
+)
 
 # -----------------------------
 # Globals
 # -----------------------------
-BASE_DIR = Path(__file__).parent.resolve()
-TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
-SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
-SHEET_NAME = "Reports"
-CACHE_FILE = BASE_DIR / "offline_cache.json"
 
-DISCIPLINE_COL = 11  # (kept from original)
 
 # -----------------------------
 # Utility functions
