@@ -34,17 +34,6 @@ img_per_row = st.sidebar.selectbox("Images per row", options=[1, 2, 3, 4], index
 add_border = st.sidebar.checkbox("Add border to images", value=False)
 spacing_mm = st.sidebar.slider("Spacing between images (mm)", min_value=0, max_value=20, value=2, step=1)
 
-cache = load_offline_cache()
-if cache and cache.get("rows"):
-    st.info("Cached offline data detected. Use the button below to sync back to the Google Sheet.")
-    if st.button("Sync cached data to Google Sheet"):
-        try:
-            append_rows_to_sheet(cache.get("rows", []))
-            st.success("Cached data synced to Google Sheet.")
-            cache = None
-        except Exception as e:
-            st.error(f"Sync failed: {e}")
-
 try:
     rows = get_sheet_data()
 except Exception:
@@ -147,20 +136,3 @@ if site_date_pairs:
             uploaded_image_mapping[(site_name, date)] = imgs
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
-
-if st.button("🚀 Generate & Download All Reports"):
-    with st.spinner("Generating reports..."):
-        if offline_enabled:
-            save_offline_cache(filtered_rows, uploaded_image_mapping)
-        zip_bytes = generate_reports(
-            filtered_rows, uploaded_image_mapping, discipline, img_width_mm, img_per_row, add_border
-        )
-        st.download_button(
-            "⬇️ Download ZIP",
-            data=zip_bytes,
-            file_name="daily_reports.zip",
-            mime="application/zip",
-        )
-
-st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
-st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
