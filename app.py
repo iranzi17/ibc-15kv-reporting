@@ -213,7 +213,7 @@ SIGNATORIES = {
         "Contractor_Title": "Electrical Engineer",
         "Contractor_Signature": "issac_habimana.jpg",
     },
-},
+}
 
 
 # -----------------------------
@@ -505,7 +505,11 @@ if st.button("🚀 Generate & Download All Reports"):
                     "Another_Work_Executed": another_work_executed,
                     "Comment_on_HSE": comment_on_hse,
                     "Consultant_Recommandation": consultant_recommandation,
-                    "Prepared_Signature": cons_sig_img,
+                    "Consultant_Name": sign_info.get("Consultant_Name", ""),
+                    "Consultant_Title": sign_info.get("Consultant_Title", ""),
+                    "Contractor_Name": sign_info.get("Contractor_Name", ""),
+                    "Contractor_Title": sign_info.get("Contractor_Title", ""),
+                    "Consultant_Signature": cons_sig_img,
                     "Contractor_Signature": cont_sig_img,
                     "Gallery": images_subdoc,
                 }
