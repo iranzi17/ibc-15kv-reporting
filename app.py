@@ -9,9 +9,13 @@ from sheets import (
     load_offline_cache,
 )
 
+from ui import render_workwatch_header, set_background
+
 
 def run_app():
     """Render the Streamlit interface."""
+    set_background("bg.jpg")
+    render_workwatch_header()
 
     # Controls that were mistakenly embedded in HTML in original file:
     st.sidebar.subheader("Gallery Controls")
