@@ -83,7 +83,7 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
 
 def generate_reports(
     filtered_rows: List[List[str]],
-    uploaded_image_mapping: Dict[tuple, List],
+    uploaded_image_mapping: Dict[tuple, List[bytes]],
     discipline: str,
     img_width_mm: int,
     img_per_row: int,
@@ -118,15 +118,15 @@ def generate_reports(
                     "Template is missing placeholders: " + ", ".join(sorted(missing))
                 )
 
-            image_files = uploaded_image_mapping.get((site_name, date), []) or []
+            image_bytes = uploaded_image_mapping.get((site_name, date), []) or []
             images_subdoc = tpl.new_subdoc()
             row_cells = []
-            for idx, img_file in enumerate(image_files):
+            for idx, data in enumerate(image_bytes):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
-                    tmp_img.write(img_file.getbuffer())
+                    tmp_img.write(data)
                     tmp_img.flush()
                     row_cells.append(tmp_img.name)
-                if (idx + 1) % img_per_row == 0 or idx == len(image_files) - 1:
+                if (idx + 1) % img_per_row == 0 or idx == len(image_bytes) - 1:
                     table = images_subdoc.add_table(rows=1, cols=img_per_row)
                     for col_idx in range(img_per_row):
                         cell = table.rows[0].cells[col_idx]

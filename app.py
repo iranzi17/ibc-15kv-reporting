@@ -88,8 +88,6 @@ def run_app():
 
     site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
-    uploaded_image_mapping: dict[tuple[str, str], list] = {}
-
     # Preview
     st.subheader("Preview Reports to be Generated")
     df_preview = pd.DataFrame(
@@ -118,12 +116,13 @@ def run_app():
             key=f"uploader_{site}_{date}",
         )
         if files:
-            uploaded_image_mapping[(site.strip(), date.strip())] = files
+            key = (site.strip(), date.strip())
+            st.session_state.setdefault("images", {})[key] = [f.read() for f in files]
 
     if st.button("Generate Reports"):
         zip_bytes = generate_reports(
             filtered_rows,
-            uploaded_image_mapping,
+            st.session_state.get("images", {}),
             discipline,
             img_width_mm,
             img_per_row,
