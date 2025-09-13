@@ -132,8 +132,15 @@ if site_date_pairs:
             imgs = st.file_uploader(
                 f"Images for {site_name} ({date})",
                 accept_multiple_files=True,
+                type=["png", "jpg", "jpeg", "webp"],
                 key=f"uploader_{safe_filename(site_name)}_{safe_filename(date)}",
             )
-            uploaded_image_mapping[(site_name, date)] = imgs
+            valid_imgs = []
+            for img_file in imgs or []:
+                if img_file.type and img_file.type.startswith("image/"):
+                    valid_imgs.append(img_file)
+                else:
+                    st.warning(f"Skipping invalid file: {img_file.name}")
+            uploaded_image_mapping[(site_name, date)] = valid_imgs
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
