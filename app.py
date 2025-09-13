@@ -407,6 +407,8 @@ if show_dashboard:
 # Image upload UI
 st.subheader("Gallery Preview & Customization")
 for site_name, date in site_date_pairs:
+    site_name = site_name.strip()
+    date = date.strip()
     image_files = uploaded_image_mapping.get((site_name, date), []) or []
     if image_files:
         st.markdown(f"**Gallery for {site_name} ({date})**")
@@ -419,6 +421,8 @@ for site_name, date in site_date_pairs:
 
 if site_date_pairs:
     for site_name, date in site_date_pairs:
+        site_name = site_name.strip()
+        date = date.strip()
         with st.expander(f"Upload Images for {site_name} ({date})"):
             imgs = st.file_uploader(
                 f"Images for {site_name} ({date})",
@@ -442,6 +446,9 @@ if st.button("🚀 Generate & Download All Reports"):
                     work_executed, comment_on_work, another_work_executed,
                     comment_on_hse, consultant_recommandation
                 ) = (row + [""] * 11)[:11]
+
+                date = date.strip()
+                site_name = site_name.strip()
 
                 tpl = DocxTemplate(TEMPLATE_PATH)
 
