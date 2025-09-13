@@ -24,22 +24,7 @@ import streamlit as st
                 st.error(f"Sync failed: {e}")
     
     try:
-        rows = get_sheet_data()
-    except Exception as e:
-        rows = []
-        st.warning("Unable to fetch data from the Google Sheet.")
-    
-    if not rows:
-        st.warning("No data found in the Google Sheet.")
-        st.stop()
-    
-    sites, all_dates = get_unique_sites_and_dates(rows)
-    
-    with st.sidebar:
-        offline_enabled = st.checkbox("Enable offline cache", value=False)
-        st.header("Select Discipline")
-        discipline = st.radio(
-            "Choose discipline:", ["Civil", "Electrical"], index=0, key="discipline_radio"
+
         )
     
         st.header("Select Sites")
