@@ -26,6 +26,17 @@ def get_gsheet(sheet_id: str, sheet_name: str):
     return client.open_by_key(sheet_id).worksheet(sheet_name)
 
 
+def append_to_sheet(row_data: dict, sheet):
+    """Append a dictionary of row data to the worksheet using header order."""
+
+    headers = sheet.row_values(1)
+    if not headers:
+        raise ValueError("Worksheet must have a header row to append data.")
+
+    ordered_row = [row_data.get(header, "") for header in headers]
+    sheet.append_row(ordered_row)
+
+
 def run_app():
     """Render the Streamlit interface."""
     set_background("bg.jpg")
