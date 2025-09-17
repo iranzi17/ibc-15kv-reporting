@@ -1,7 +1,6 @@
 import pandas as pd
 import streamlit as st
 import gspread
-from google.oauth2.service_account import Credentials
 
 from config import SHEET_ID, SHEET_NAME
 
@@ -11,6 +10,7 @@ from sheets import (
     get_sheet_data,
     get_unique_sites_and_dates,
     load_offline_cache,
+    get_service_account_credentials,
 )
 
 from ui import render_workwatch_header, set_background
@@ -19,11 +19,7 @@ from report import generate_reports
 
 def get_gsheet(sheet_id: str, sheet_name: str):
     """Return a gspread worksheet for the given sheet ID and worksheet name."""
-    service_account_info = st.secrets["gcp_service_account"]
-    credentials = Credentials.from_service_account_info(
-        service_account_info,
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
-    )
+    credentials = get_service_account_credentials()
     client = gspread.authorize(credentials)
     return client.open_by_key(sheet_id).worksheet(sheet_name)
 

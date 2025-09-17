@@ -17,7 +17,8 @@ GOOGLE_CREDENTIALS = """
 ```
 
 The credentials are parsed with `json.loads(st.secrets["GOOGLE_CREDENTIALS"])`
-when the app starts.
+when the app starts. For backwards compatibility, an older
+`gcp_service_account` key is also accepted if present.
 
 ## Configuration
 
