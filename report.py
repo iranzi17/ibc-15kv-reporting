@@ -9,8 +9,9 @@ import streamlit as st
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 
+from config import TEMPLATE_PATH
+
 BASE_DIR = Path(__file__).parent.resolve()
-TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
 
 SIGNATORIES = {
     "Civil": {

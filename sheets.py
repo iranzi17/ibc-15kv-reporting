@@ -1,16 +1,13 @@
 import base64
 import json
-from pathlib import Path
 from typing import Dict, List
 
 import streamlit as st
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-BASE_DIR = Path(__file__).parent.resolve()
-SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
-SHEET_NAME = "Reports"
-CACHE_FILE = BASE_DIR / "offline_cache.json"
+from config import CACHE_FILE, SHEET_ID, SHEET_NAME
+
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
