@@ -3,6 +3,8 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 
+from config import SHEET_ID, SHEET_NAME
+
 from sheets import (
     CACHE_FILE,
     append_rows_to_sheet,
@@ -41,6 +43,8 @@ def run_app():
     """Render the Streamlit interface."""
     set_background("bg.jpg")
     render_workwatch_header()
+
+    st.session_state.setdefault("chatgpt_report_data", None)
 
     # Controls that were mistakenly embedded in HTML in original file:
     st.sidebar.subheader("Gallery Controls")
@@ -153,6 +157,37 @@ def run_app():
             add_border,
         )
         st.download_button("Download ZIP", zip_bytes, "reports.zip")
+
+        headers = [
+            "Date",
+            "Site_Name",
+            "District",
+            "Work",
+            "Human_Resources",
+            "Supply",
+            "Work_Executed",
+            "Comment_on_work",
+            "Another_Work_Executed",
+            "Comment_on_HSE",
+            "Consultant_Recommandation",
+        ]
+        structured_rows = [
+            dict(zip(headers, (row + [""] * len(headers))[: len(headers)]))
+            for row in filtered_rows
+        ]
+        st.session_state["chatgpt_report_data"] = structured_rows[0] if structured_rows else None
+
+    chatgpt_report = st.session_state.get("chatgpt_report_data")
+    if chatgpt_report is not None:
+        st.subheader("Generated Report JSON")
+        st.json(chatgpt_report)
+        if st.button("Send to Google Sheet"):
+            try:
+                worksheet = get_gsheet(SHEET_ID, SHEET_NAME)
+                append_to_sheet(chatgpt_report, worksheet)
+                st.success("✅ Report saved to Google Sheet!")
+            except Exception as e:  # pragma: no cover - user notification
+                st.error(f"Failed to save report: {e}")
 
 
 if __name__ == "__main__":
