@@ -175,7 +175,14 @@ def run_app():
             dict(zip(headers, (row + [""] * len(headers))[: len(headers)]))
             for row in filtered_rows
         ]
-        st.session_state["chatgpt_report_data"] = structured_rows[0] if structured_rows else None
+        if structured_rows:
+            st.session_state["chatgpt_report_data"] = (
+                structured_rows[0]
+                if len(structured_rows) == 1
+                else structured_rows
+            )
+        else:
+            st.session_state["chatgpt_report_data"] = None
 
     chatgpt_report = st.session_state.get("chatgpt_report_data")
     if chatgpt_report is not None:
@@ -184,7 +191,15 @@ def run_app():
         if st.button("Send to Google Sheet"):
             try:
                 worksheet = get_gsheet(SHEET_ID, SHEET_NAME)
-                append_to_sheet(chatgpt_report, worksheet)
+                rows_to_append = (
+                    chatgpt_report
+                    if isinstance(chatgpt_report, list)
+                    else [chatgpt_report]
+                )
+                for row_payload in rows_to_append:
+                    if not isinstance(row_payload, dict):
+                        raise ValueError("Report rows must be dictionaries.")
+                    append_to_sheet(row_payload, worksheet)
                 st.success("✅ Report saved to Google Sheet!")
             except Exception as e:  # pragma: no cover - user notification
                 st.error(f"Failed to save report: {e}")
