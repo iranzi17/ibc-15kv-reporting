@@ -15,6 +15,7 @@ from sheets import (
 
 from ui import render_workwatch_header, set_background
 from report import generate_reports
+from chatgpt_helpers import REPORT_HEADERS, clean_and_structure_report
 
 
 def get_gsheet(sheet_id: str, sheet_name: str):
@@ -117,23 +118,31 @@ def run_app():
 
     site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
+    st.subheader("Process Contractor Report with ChatGPT")
+    raw_report_text = st.text_area(
+        "Paste the contractor's raw report:",
+        key="chatgpt_raw_report_text",
+        height=300,
+    )
+    if st.button("Clean & Structure with ChatGPT"):
+        if not raw_report_text.strip():
+            st.warning("Please paste the contractor report before processing.")
+        else:
+            try:
+                structured_payload = clean_and_structure_report(raw_report_text)
+            except ValueError as exc:
+                st.warning(str(exc))
+            except Exception as exc:  # pragma: no cover - user notification
+                st.error(f"ChatGPT processing failed: {exc}")
+            else:
+                st.session_state["chatgpt_report_data"] = structured_payload
+                st.success("Report processed with ChatGPT.")
+
     # Preview
     st.subheader("Preview Reports to be Generated")
     df_preview = pd.DataFrame(
         filtered_rows,
-        columns=[
-            "Date",
-            "Site_Name",
-            "District",
-            "Work",
-            "Human_Resources",
-            "Supply",
-            "Work_Executed",
-            "Comment_on_work",
-            "Another_Work_Executed",
-            "Comment_on_HSE",
-            "Consultant_Recommandation",
-        ],
+        columns=REPORT_HEADERS,
     )
     st.dataframe(df_preview)
 
@@ -160,21 +169,13 @@ def run_app():
         )
         st.download_button("Download ZIP", zip_bytes, "reports.zip")
 
-        headers = [
-            "Date",
-            "Site_Name",
-            "District",
-            "Work",
-            "Human_Resources",
-            "Supply",
-            "Work_Executed",
-            "Comment_on_work",
-            "Another_Work_Executed",
-            "Comment_on_HSE",
-            "Consultant_Recommandation",
-        ]
         structured_rows = [
-            dict(zip(headers, (row + [""] * len(headers))[: len(headers)]))
+            dict(
+                zip(
+                    REPORT_HEADERS,
+                    (row + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)],
+                )
+            )
             for row in filtered_rows
         ]
         if structured_rows:
