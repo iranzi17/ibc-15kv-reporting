@@ -14,11 +14,33 @@ CACHE_FILE = BASE_DIR / "offline_cache.json"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
-def _build_service():
-    service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    creds = service_account.Credentials.from_service_account_info(
+def _load_service_account_info() -> Dict:
+    """Load the service account JSON from Streamlit secrets."""
+
+    if "GOOGLE_CREDENTIALS" in st.secrets:
+        raw_credentials = st.secrets["GOOGLE_CREDENTIALS"]
+        if isinstance(raw_credentials, str):
+            return json.loads(raw_credentials)
+        return raw_credentials
+    if "gcp_service_account" in st.secrets:
+        return st.secrets["gcp_service_account"]
+    raise KeyError(
+        "Google service account credentials not configured. Set "
+        "st.secrets['GOOGLE_CREDENTIALS'] with the JSON payload."
+    )
+
+
+def get_service_account_credentials() -> service_account.Credentials:
+    """Return Google service account credentials for the configured scopes."""
+
+    service_account_info = _load_service_account_info()
+    return service_account.Credentials.from_service_account_info(
         service_account_info, scopes=SCOPES
     )
+
+
+def _build_service():
+    creds = get_service_account_credentials()
     return build("sheets", "v4", credentials=creds)
 
 
