@@ -1,5 +1,9 @@
 import pandas as pd
 import streamlit as st
+import gspread
+from google.oauth2.service_account import Credentials
+
+from config import SHEET_ID, SHEET_NAME
 
 from sheets import (
     CACHE_FILE,
@@ -13,10 +17,34 @@ from ui import render_workwatch_header, set_background
 from report import generate_reports
 
 
+def get_gsheet(sheet_id: str, sheet_name: str):
+    """Return a gspread worksheet for the given sheet ID and worksheet name."""
+    service_account_info = st.secrets["gcp_service_account"]
+    credentials = Credentials.from_service_account_info(
+        service_account_info,
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    )
+    client = gspread.authorize(credentials)
+    return client.open_by_key(sheet_id).worksheet(sheet_name)
+
+
+def append_to_sheet(row_data: dict, sheet):
+    """Append a dictionary of row data to the worksheet using header order."""
+
+    headers = sheet.row_values(1)
+    if not headers:
+        raise ValueError("Worksheet must have a header row to append data.")
+
+    ordered_row = [row_data.get(header, "") for header in headers]
+    sheet.append_row(ordered_row)
+
+
 def run_app():
     """Render the Streamlit interface."""
     set_background("bg.jpg")
     render_workwatch_header()
+
+    st.session_state.setdefault("chatgpt_report_data", None)
 
     # Controls that were mistakenly embedded in HTML in original file:
     st.sidebar.subheader("Gallery Controls")
@@ -129,6 +157,52 @@ def run_app():
             add_border,
         )
         st.download_button("Download ZIP", zip_bytes, "reports.zip")
+
+        headers = [
+            "Date",
+            "Site_Name",
+            "District",
+            "Work",
+            "Human_Resources",
+            "Supply",
+            "Work_Executed",
+            "Comment_on_work",
+            "Another_Work_Executed",
+            "Comment_on_HSE",
+            "Consultant_Recommandation",
+        ]
+        structured_rows = [
+            dict(zip(headers, (row + [""] * len(headers))[: len(headers)]))
+            for row in filtered_rows
+        ]
+        if structured_rows:
+            st.session_state["chatgpt_report_data"] = (
+                structured_rows[0]
+                if len(structured_rows) == 1
+                else structured_rows
+            )
+        else:
+            st.session_state["chatgpt_report_data"] = None
+
+    chatgpt_report = st.session_state.get("chatgpt_report_data")
+    if chatgpt_report is not None:
+        st.subheader("Generated Report JSON")
+        st.json(chatgpt_report)
+        if st.button("Send to Google Sheet"):
+            try:
+                worksheet = get_gsheet(SHEET_ID, SHEET_NAME)
+                rows_to_append = (
+                    chatgpt_report
+                    if isinstance(chatgpt_report, list)
+                    else [chatgpt_report]
+                )
+                for row_payload in rows_to_append:
+                    if not isinstance(row_payload, dict):
+                        raise ValueError("Report rows must be dictionaries.")
+                    append_to_sheet(row_payload, worksheet)
+                st.success("✅ Report saved to Google Sheet!")
+            except Exception as e:  # pragma: no cover - user notification
+                st.error(f"Failed to save report: {e}")
 
 
 if __name__ == "__main__":
