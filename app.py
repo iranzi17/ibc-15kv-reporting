@@ -72,7 +72,8 @@ def run_app():
 
     try:
         rows = get_sheet_data()
-        sites, _ = get_unique_sites_and_dates(rows)
+        data_rows = rows[1:] if rows else []
+        sites, _ = get_unique_sites_and_dates(data_rows)
 
         col_left, col_right = st.columns([1, 2])
 
@@ -92,7 +93,11 @@ def run_app():
 
             st.header("Select Dates")
             site_dates = sorted(
-                {row[0].strip() for row in rows if row[1].strip() in selected_sites}
+                {
+                    row[0].strip()
+                    for row in data_rows
+                    if row[1].strip() in selected_sites
+                }
             )
             date_choices = ["All Dates"] + site_dates
             selected_dates = st.multiselect(
@@ -106,7 +111,7 @@ def run_app():
 
     # Filtered rows
     filtered_rows = [
-        row for row in rows
+        row for row in data_rows
         if row[1].strip() in selected_sites and row[0].strip() in selected_dates
     ]
 
