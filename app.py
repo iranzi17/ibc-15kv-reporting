@@ -149,6 +149,7 @@ def run_app():
             st.session_state.get("images", {}),
             discipline,
             img_width_mm,
+            spacing_mm,
             img_per_row,
             add_border,
         )
