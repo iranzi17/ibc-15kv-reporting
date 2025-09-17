@@ -1,6 +1,21 @@
 import app
 
 
+HEADERS = [
+    "Date",
+    "Site_Name",
+    "District",
+    "Work",
+    "Human_Resources",
+    "Supply",
+    "Work_Executed",
+    "Comment_on_work",
+    "Another_Work_Executed",
+    "Comment_on_HSE",
+    "Consultant_Recommandation",
+]
+
+
 class _ColumnContext:
     def __enter__(self):
         return self
@@ -31,10 +46,14 @@ class _StreamlitStub:
         self.uploader_labels = []
         self.dataframe_capture = None
         self.json_value = None
+        self.text_area_value = ""
+        self.text_area_calls = []
+        self.warning_messages = []
         self.button_states = {
             "Sync cached data to Google Sheet": False,
             "Generate Reports": True,
             "Send to Google Sheet": False,
+            "Clean & Structure with ChatGPT": False,
         }
 
     def columns(self, *_):
@@ -78,23 +97,18 @@ class _StreamlitStub:
     def error(self, *_, **__):
         return None
 
+    def text_area(self, label, *_, **__):
+        self.text_area_calls.append(label)
+        return self.text_area_value
+
+    def warning(self, message, *_, **__):
+        self.warning_messages.append(message)
+        return None
+
 
 def test_run_app_excludes_header_rows(monkeypatch):
-    headers = [
-        "Date",
-        "Site_Name",
-        "District",
-        "Work",
-        "Human_Resources",
-        "Supply",
-        "Work_Executed",
-        "Comment_on_work",
-        "Another_Work_Executed",
-        "Comment_on_HSE",
-        "Consultant_Recommandation",
-    ]
     sheet_rows = [
-        headers,
+        HEADERS,
         [
             "2024-01-01",
             "Site A",
@@ -158,3 +172,49 @@ def test_run_app_excludes_header_rows(monkeypatch):
     assert isinstance(chatgpt_report, list)
     assert [row["Site_Name"] for row in chatgpt_report] == ["Site A", "Site B"]
     assert st_stub.json_value == chatgpt_report
+
+
+def test_run_app_uses_chatgpt_helper_when_button_clicked(monkeypatch):
+    sheet_rows = [
+        HEADERS,
+        [
+            "2024-01-01",
+            "Site A",
+            "District 1",
+            "Work details A",
+            "Crew A",
+            "Supply A",
+            "Executed A",
+            "Comment A",
+            "Another Executed A",
+            "HSE A",
+            "Recommendation A",
+        ],
+    ]
+
+    monkeypatch.setattr(app, "get_sheet_data", lambda: sheet_rows)
+    monkeypatch.setattr(app, "load_offline_cache", lambda: None)
+    monkeypatch.setattr(app, "generate_reports", lambda *_, **__: b"zip-bytes")
+    monkeypatch.setattr(app, "set_background", lambda *_: None)
+    monkeypatch.setattr(app, "render_workwatch_header", lambda *_: None)
+
+    captured_text = []
+    canned_payload = {header: f"value-{header}" for header in HEADERS}
+
+    def fake_helper(raw_text):
+        captured_text.append(raw_text)
+        return canned_payload
+
+    monkeypatch.setattr(app, "clean_and_structure_report", fake_helper)
+
+    st_stub = _StreamlitStub()
+    st_stub.text_area_value = "Sample contractor report"
+    st_stub.button_states["Generate Reports"] = False
+    st_stub.button_states["Clean & Structure with ChatGPT"] = True
+    monkeypatch.setattr(app, "st", st_stub)
+
+    app.run_app()
+
+    assert captured_text == ["Sample contractor report"]
+    assert st_stub.session_state["chatgpt_report_data"] == canned_payload
+    assert st_stub.json_value == canned_payload
