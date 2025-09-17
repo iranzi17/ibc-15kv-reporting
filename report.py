@@ -7,6 +7,8 @@ from typing import Dict, List, Optional
 
 import streamlit as st
 from docxtpl import DocxTemplate, InlineImage
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Mm
 
 BASE_DIR = Path(__file__).parent.resolve()
@@ -81,11 +83,37 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
     return None
 
 
+def _mm_to_twips(mm_value: float) -> int:
+    """Convert millimetres to Word twips (1/20th of a point)."""
+
+    twips = mm_value * 1440 / 25.4
+    return max(0, int(round(twips)))
+
+
+def _apply_cell_spacing(cell, spacing_mm: int) -> None:
+    """Apply uniform cell margins in millimetres to a python-docx cell."""
+
+    twips = _mm_to_twips(spacing_mm)
+    tc_pr = cell._element.get_or_add_tcPr()
+    tc_mar = tc_pr.find(qn("w:tcMar"))
+    if tc_mar is None:
+        tc_mar = OxmlElement("w:tcMar")
+        tc_pr.append(tc_mar)
+    for side in ("top", "left", "bottom", "right"):
+        margin = tc_mar.find(qn(f"w:{side}"))
+        if margin is None:
+            margin = OxmlElement(f"w:{side}")
+            tc_mar.append(margin)
+        margin.set(qn("w:w"), str(twips))
+        margin.set(qn("w:type"), "dxa")
+
+
 def generate_reports(
     filtered_rows: List[List[str]],
     uploaded_image_mapping: Dict[tuple, List[bytes]],
     discipline: str,
     img_width_mm: int,
+    spacing_mm: int,
     img_per_row: int = 2,
     add_border: bool = False,
     template_path: str = TEMPLATE_PATH,
@@ -103,10 +131,7 @@ def generate_reports(
             date = date.strip()
 
             tpl = DocxTemplate(template_path)
-            section = tpl.get_docx().sections[0]
-            usable_w = section.page_width.mm - section.left_margin.mm - section.right_margin.mm
-            usable_h = section.page_height.mm - section.top_margin.mm - section.bottom_margin.mm
-            half_w, half_h = usable_w / 2, usable_h / 2
+            target_width_mm = max(1, img_width_mm)
             required = {
                 "Consultant_Name",
                 "Consultant_Title",
@@ -134,10 +159,12 @@ def generate_reports(
                     table = images_subdoc.add_table(rows=1, cols=img_per_row)
                     for col_idx in range(img_per_row):
                         cell = table.rows[0].cells[col_idx]
+                        _apply_cell_spacing(cell, spacing_mm)
                         if col_idx < len(row_cells):
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
-                            run.add_picture(img_path, width=Mm(half_w), height=Mm(half_h))
+                            picture = run.add_picture(img_path)
+                            picture.width = Mm(target_width_mm)
                             if add_border:
                                 from docx.oxml import parse_xml
 
