@@ -41,7 +41,7 @@ def run_app():
     set_background("bg.jpg")
     render_workwatch_header()
 
-    st.session_state.setdefault("chatgpt_report_data", None)
+    st.session_state.setdefault("structured_report_data", None)
 
     # Controls that were mistakenly embedded in HTML in original file:
     st.sidebar.subheader("Gallery Controls")
@@ -118,13 +118,13 @@ def run_app():
 
     site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
-    st.subheader("Process Contractor Report with ChatGPT")
+    st.subheader("Process Contractor Report with Hugging Face")
     raw_report_text = st.text_area(
         "Paste the contractor's raw report:",
-        key="chatgpt_raw_report_text",
+        key="structured_raw_report_text",
         height=300,
     )
-    if st.button("Clean & Structure with ChatGPT"):
+    if st.button("Clean & Structure with Hugging Face"):
         if not raw_report_text.strip():
             st.warning("Please paste the contractor report before processing.")
         else:
@@ -133,10 +133,10 @@ def run_app():
             except ValueError as exc:
                 st.warning(str(exc))
             except Exception as exc:  # pragma: no cover - user notification
-                st.error(f"ChatGPT processing failed: {exc}")
+                st.error(f"Hugging Face processing failed: {exc}")
             else:
-                st.session_state["chatgpt_report_data"] = structured_payload
-                st.success("Report processed with ChatGPT.")
+                st.session_state["structured_report_data"] = structured_payload
+                st.success("Report processed with Hugging Face.")
 
     # Preview
     st.subheader("Preview Reports to be Generated")
@@ -179,25 +179,25 @@ def run_app():
             for row in filtered_rows
         ]
         if structured_rows:
-            st.session_state["chatgpt_report_data"] = (
+            st.session_state["structured_report_data"] = (
                 structured_rows[0]
                 if len(structured_rows) == 1
                 else structured_rows
             )
         else:
-            st.session_state["chatgpt_report_data"] = None
+            st.session_state["structured_report_data"] = None
 
-    chatgpt_report = st.session_state.get("chatgpt_report_data")
-    if chatgpt_report is not None:
+    structured_report = st.session_state.get("structured_report_data")
+    if structured_report is not None:
         st.subheader("Generated Report JSON")
-        st.json(chatgpt_report)
+        st.json(structured_report)
         if st.button("Send to Google Sheet"):
             try:
                 worksheet = get_gsheet(SHEET_ID, SHEET_NAME)
                 rows_to_append = (
-                    chatgpt_report
-                    if isinstance(chatgpt_report, list)
-                    else [chatgpt_report]
+                    structured_report
+                    if isinstance(structured_report, list)
+                    else [structured_report]
                 )
                 for row_payload in rows_to_append:
                     if not isinstance(row_payload, dict):

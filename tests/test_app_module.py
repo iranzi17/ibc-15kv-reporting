@@ -53,7 +53,7 @@ class _StreamlitStub:
             "Sync cached data to Google Sheet": False,
             "Generate Reports": True,
             "Send to Google Sheet": False,
-            "Clean & Structure with ChatGPT": False,
+            "Clean & Structure with Hugging Face": False,
         }
 
     def columns(self, *_):
@@ -168,13 +168,13 @@ def test_run_app_excludes_header_rows(monkeypatch):
         "Upload images for Site B - 2024-01-02",
     ]
 
-    chatgpt_report = st_stub.session_state.get("chatgpt_report_data")
-    assert isinstance(chatgpt_report, list)
-    assert [row["Site_Name"] for row in chatgpt_report] == ["Site A", "Site B"]
-    assert st_stub.json_value == chatgpt_report
+    structured_report = st_stub.session_state.get("structured_report_data")
+    assert isinstance(structured_report, list)
+    assert [row["Site_Name"] for row in structured_report] == ["Site A", "Site B"]
+    assert st_stub.json_value == structured_report
 
 
-def test_run_app_uses_chatgpt_helper_when_button_clicked(monkeypatch):
+def test_run_app_uses_helper_when_button_clicked(monkeypatch):
     sheet_rows = [
         HEADERS,
         [
@@ -210,11 +210,11 @@ def test_run_app_uses_chatgpt_helper_when_button_clicked(monkeypatch):
     st_stub = _StreamlitStub()
     st_stub.text_area_value = "Sample contractor report"
     st_stub.button_states["Generate Reports"] = False
-    st_stub.button_states["Clean & Structure with ChatGPT"] = True
+    st_stub.button_states["Clean & Structure with Hugging Face"] = True
     monkeypatch.setattr(app, "st", st_stub)
 
     app.run_app()
 
     assert captured_text == ["Sample contractor report"]
-    assert st_stub.session_state["chatgpt_report_data"] == canned_payload
+    assert st_stub.session_state["structured_report_data"] == canned_payload
     assert st_stub.json_value == canned_payload
