@@ -2,6 +2,20 @@
 
 This Streamlit app helps generate daily electrical consultant reports.
 
+## Configuring AI Structuring Support
+
+The helper that structures pasted reports now calls a Hugging Face Inference
+Endpoint. Provide an access token under the `HUGGINGFACE_API_KEY` secret in your
+`.streamlit/secrets.toml` file:
+
+```
+# .streamlit/secrets.toml
+HUGGINGFACE_API_KEY = "hf_xxx"
+```
+
+The token must have permission to query the model configured in
+`chatgpt_helpers.MODEL_ID` (default: `mistralai/Mistral-7B-Instruct`).
+
 ## Providing Google Credentials
 
 The app also needs access to your reporting Google Sheet. Create a Google

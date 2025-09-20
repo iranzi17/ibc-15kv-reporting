@@ -1,4 +1,4 @@
-"""Utilities for structuring contractor reports using OpenAI's Chat Completions API."""
+"""Utilities for structuring contractor reports using Hugging Face text generation."""
 from __future__ import annotations
 
 import json
@@ -21,7 +21,8 @@ REPORT_HEADERS: List[str] = [
     "Consultant_Recommandation",
 ]
 
-_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
+MODEL_ID = "mistralai/Mistral-7B-Instruct"
+_INFERENCE_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
 _PROMPT_TEMPLATE = """You are a meticulous assistant that converts contractor site reports into
 structured data. Map the provided text into the following columns exactly:
 {headers}.
@@ -38,7 +39,7 @@ Raw report:\n{report_text}
 def clean_and_structure_report(
     raw_report_text: str,
 ) -> Union[Dict[str, str], List[Dict[str, str]]]:
-    """Use OpenAI Chat Completions to structure a raw contractor report.
+    """Use a Hugging Face text-generation model to structure a raw contractor report.
 
     Parameters
     ----------
@@ -54,7 +55,7 @@ def clean_and_structure_report(
     Raises
     ------
     RuntimeError
-        If the API key is missing or the OpenAI API request fails.
+        If the API key is missing or the Hugging Face API request fails.
     ValueError
         If the raw report text is empty or the response cannot be normalised.
     """
@@ -63,31 +64,22 @@ def clean_and_structure_report(
         raise ValueError("Raw report text is empty.")
 
     try:
-        api_key = st.secrets["OPENAI_API_KEY"]
+        api_key = st.secrets["HUGGINGFACE_API_KEY"]
     except Exception as exc:  # pragma: no cover - defensive access to secrets
         raise RuntimeError(
-            "OpenAI API key is not configured. Set OPENAI_API_KEY in Streamlit secrets."
+            "Hugging Face API key is not configured. Set HUGGINGFACE_API_KEY in Streamlit secrets."
         ) from exc
-
+    prompt = _PROMPT_TEMPLATE.format(
+        headers=", ".join(REPORT_HEADERS), report_text=raw_report_text
+    )
     payload = {
-        "model": "gpt-4o-mini",
-        "temperature": 0,
-        "messages": [
-            {
-                "role": "system",
-                "content": "You extract tabular data from contractor reports.",
-            },
-            {
-                "role": "user",
-                "content": _PROMPT_TEMPLATE.format(
-                    headers=", ".join(REPORT_HEADERS), report_text=raw_report_text
-                ),
-            },
-        ],
+        "inputs": prompt,
+        "parameters": {"temperature": 0.0, "max_new_tokens": 800},
+        "options": {"wait_for_model": True},
     }
 
     http_request = request.Request(
-        _CHAT_COMPLETIONS_URL,
+        _INFERENCE_URL,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
@@ -101,21 +93,37 @@ def clean_and_structure_report(
             raw_body = response.read().decode("utf-8")
     except error.HTTPError as exc:
         error_details = _read_error_body(exc)
-        message = error_details or exc.reason or str(exc.code)
-        raise RuntimeError(f"OpenAI API error ({exc.code}): {message}") from exc
+        message = _extract_error_message(error_details) or exc.reason or str(exc.code)
+        raise RuntimeError(f"Hugging Face API error ({exc.code}): {message}") from exc
     except error.URLError as exc:
-        raise RuntimeError(f"Failed to contact OpenAI API: {exc.reason}") from exc
-
+        raise RuntimeError(f"Failed to contact Hugging Face API: {exc.reason}") from exc
     try:
         response_json = json.loads(raw_body)
-        content = response_json["choices"][0]["message"]["content"]
-    except (json.JSONDecodeError, KeyError, IndexError) as exc:
-        raise RuntimeError("Unexpected response from OpenAI API.") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Unexpected response from Hugging Face API.") from exc
+
+    if isinstance(response_json, dict) and "error" in response_json:
+        raise RuntimeError(f"Hugging Face API error: {response_json['error']}")
+
+    if not isinstance(response_json, list) or not response_json:
+        raise RuntimeError("Unexpected response from Hugging Face API.")
+
+    first_item = response_json[0]
+    if not isinstance(first_item, dict):
+        raise RuntimeError("Unexpected response from Hugging Face API.")
+
+    generated_text = first_item.get("generated_text")
+    if not generated_text:
+        error_message = _extract_error_message(raw_body) or "Missing generated_text in response."
+        raise RuntimeError(f"Hugging Face API error: {error_message}")
+
+    if generated_text.startswith(prompt):
+        generated_text = generated_text[len(prompt) :]
 
     try:
-        parsed_payload = _parse_json_content(content)
+        parsed_payload = _parse_json_content(generated_text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Model response could not be parsed as JSON.") from exc
+
 
     try:
         normalised_rows = _normalise_payload(parsed_payload)
@@ -176,3 +184,22 @@ def _read_error_body(exc: error.HTTPError) -> str:
     except Exception:  # pragma: no cover - fallback if body cannot be read
         return ""
     return body.strip()
+
+
+def _extract_error_message(body: str) -> str:
+    if not body:
+        return ""
+    try:
+        parsed_body = json.loads(body)
+    except json.JSONDecodeError:
+        return body.strip()
+
+    if isinstance(parsed_body, dict):
+        error_message = parsed_body.get("error")
+        if error_message:
+            return str(error_message)
+    if isinstance(parsed_body, list):
+        for item in parsed_body:
+            if isinstance(item, dict) and item.get("error"):
+                return str(item["error"])
+    return ""
