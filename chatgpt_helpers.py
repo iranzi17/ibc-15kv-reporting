@@ -115,7 +115,7 @@ def clean_and_structure_report(
     try:
         parsed_payload = _parse_json_content(content)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("ChatGPT response could not be parsed as JSON.") from exc
+        raise RuntimeError("Model response could not be parsed as JSON.") from exc
 
     try:
         normalised_rows = _normalise_payload(parsed_payload)
@@ -154,7 +154,7 @@ def _normalise_payload(data: Any) -> List[Dict[str, str]]:
         return [_normalise_row(data)]
     if isinstance(data, list):
         return [_normalise_row(item) for item in data]
-    raise ValueError("ChatGPT response must be a JSON object or list of objects.")
+    raise ValueError("Model response must be a JSON object or list of objects.")
 
 
 def _normalise_row(item: Any) -> Dict[str, str]:
