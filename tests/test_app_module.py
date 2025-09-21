@@ -53,7 +53,7 @@ class _StreamlitStub:
             "Sync cached data to Google Sheet": False,
             "Generate Reports": True,
             "Send to Google Sheet": False,
-            "Clean & Structure with Hugging Face": False,
+            "Clean & Structure Report": False,
         }
 
     def columns(self, *_):
@@ -210,7 +210,7 @@ def test_run_app_uses_helper_when_button_clicked(monkeypatch):
     st_stub = _StreamlitStub()
     st_stub.text_area_value = "Sample contractor report"
     st_stub.button_states["Generate Reports"] = False
-    st_stub.button_states["Clean & Structure with Hugging Face"] = True
+    st_stub.button_states["Clean & Structure Report"] = True
     monkeypatch.setattr(app, "st", st_stub)
 
     app.run_app()

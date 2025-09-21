@@ -2,38 +2,6 @@
 
 This Streamlit app helps generate daily electrical consultant reports.
 
-## Structuring Contractor Reports Offline
-
-The app no longer relies on a hosted AI service for turning raw contractor
-notes into tabular data. When you need assistance preparing a report, run the
-parser locally and review the JSON it produces before loading it into the app.
-
-1. Save the contractor narrative to a text file while you are on site.
-2. Process that file with your offline parser so that the output JSON contains
-   the columns listed in [Google Sheet Setup](#google-sheet-setup) (for example,
-   `Date`, `Site_Name`, `Work`, and so on).
-3. Inspect the JSON and make any corrections that are needed.
-4. Open the Streamlit app and paste the JSON into the "Generated Report JSON"
-   panel. The app will treat it exactly like a structured payload generated
-   online and will allow you to send the results to Google Sheets or cache them
-   locally.
-
-If you want the app to surface the payload automatically when you next connect,
-store it in the offline cache file (`offline_cache.json`) using the following
-shape:
-
-```json
-{
-  "rows": [
-    ["2024-01-01", "Site A", "District 1", "Work details", "Crew", "Supply", "Executed", "Comment", "Additional work", "HSE", "Recommendation"]
-  ],
-  "uploads": {}
-}
-```
-
-Any cached payload will be offered for upload as soon as the app starts, making
-it easy to sync structured notes once you regain connectivity.
-
 ## Providing Google Credentials
 
 The app also needs access to your reporting Google Sheet. Create a Google
