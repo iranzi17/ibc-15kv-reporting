@@ -2,16 +2,6 @@
 
 This Streamlit app helps generate daily electrical consultant reports.
 
-## Structuring Contractor Reports
-
-The helper that structures pasted reports now runs entirely offline using
-deterministic parsing rules defined in `report_structuring.clean_and_structure_report`.
-Provide the contractor notes as ``Field: value`` lines (for example,
-``Date: 2024-04-01`` or ``Site Name: Kigali West``). To capture multiple daily
-reports in a single paste, separate each block with a line containing at least
-three hyphens (`---`). Unrecognised fields are appended to the
-`Comment_on_work` column so nothing is discarded.
-
 ## Providing Google Credentials
 
 The app also needs access to your reporting Google Sheet. Create a Google
