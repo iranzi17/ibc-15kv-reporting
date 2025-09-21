@@ -2,19 +2,15 @@
 
 This Streamlit app helps generate daily electrical consultant reports.
 
-## Configuring AI Structuring Support
+## Structuring Contractor Reports
 
-The helper that structures pasted reports now calls a Hugging Face Inference
-Endpoint. Provide an access token under the `HUGGINGFACE_API_KEY` secret in your
-`.streamlit/secrets.toml` file:
-
-```
-# .streamlit/secrets.toml
-HUGGINGFACE_API_KEY = "hf_xxx"
-```
-
-The token must have permission to query the model configured in
-`chatgpt_helpers.MODEL_ID` (default: `mistralai/Mistral-7B-Instruct`).
+The helper that structures pasted reports now runs entirely offline using
+deterministic parsing rules defined in `report_structuring.clean_and_structure_report`.
+Provide the contractor notes as ``Field: value`` lines (for example,
+``Date: 2024-04-01`` or ``Site Name: Kigali West``). To capture multiple daily
+reports in a single paste, separate each block with a line containing at least
+three hyphens (`---`). Unrecognised fields are appended to the
+`Comment_on_work` column so nothing is discarded.
 
 ## Providing Google Credentials
 

@@ -15,7 +15,7 @@ from sheets import (
 
 from ui import render_workwatch_header, set_background
 from report import generate_reports
-from chatgpt_helpers import REPORT_HEADERS, clean_and_structure_report
+from report_structuring import REPORT_HEADERS, clean_and_structure_report
 
 
 def get_gsheet(sheet_id: str, sheet_name: str):
@@ -118,13 +118,13 @@ def run_app():
 
     site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
-    st.subheader("Process Contractor Report with Hugging Face")
+    st.subheader("Process Contractor Report")
     raw_report_text = st.text_area(
         "Paste the contractor's raw report:",
         key="structured_raw_report_text",
         height=300,
     )
-    if st.button("Clean & Structure with Hugging Face"):
+    if st.button("Clean & Structure Report"):
         if not raw_report_text.strip():
             st.warning("Please paste the contractor report before processing.")
         else:
@@ -133,10 +133,10 @@ def run_app():
             except ValueError as exc:
                 st.warning(str(exc))
             except Exception as exc:  # pragma: no cover - user notification
-                st.error(f"Hugging Face processing failed: {exc}")
+                st.error(f"Report processing failed: {exc}")
             else:
                 st.session_state["structured_report_data"] = structured_payload
-                st.success("Report processed with Hugging Face.")
+                st.success("Report processed successfully.")
 
     # Preview
     st.subheader("Preview Reports to be Generated")
