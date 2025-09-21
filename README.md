@@ -14,7 +14,7 @@ HUGGINGFACE_API_KEY = "hf_xxx"
 ```
 
 The token must have permission to query the model configured in
-`chatgpt_helpers.MODEL_ID` (default: `mistralai/Mistral-7B-Instruct`).
+`report_structuring.MODEL_ID` (default: `mistralai/Mistral-7B-Instruct`).
 
 ## Providing Google Credentials
 

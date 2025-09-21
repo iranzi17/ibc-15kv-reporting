@@ -123,7 +123,7 @@ def clean_and_structure_report(
     try:
         parsed_payload = _parse_json_content(generated_text)
     except json.JSONDecodeError as exc:
-
+        raise RuntimeError("Unexpected response from Hugging Face API.") from exc
 
     try:
         normalised_rows = _normalise_payload(parsed_payload)

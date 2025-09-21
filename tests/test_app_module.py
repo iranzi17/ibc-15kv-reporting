@@ -49,11 +49,13 @@ class _StreamlitStub:
         self.text_area_value = ""
         self.text_area_calls = []
         self.warning_messages = []
+        self.success_messages = []
+        self.error_messages = []
         self.button_states = {
             "Sync cached data to Google Sheet": False,
             "Generate Reports": True,
             "Send to Google Sheet": False,
-            "Clean & Structure with Hugging Face": False,
+            "Clean & Structure Offline": False,
         }
 
     def columns(self, *_):
@@ -91,10 +93,12 @@ class _StreamlitStub:
     def info(self, *_, **__):
         return None
 
-    def success(self, *_, **__):
+    def success(self, message: str = "", *_, **__):
+        self.success_messages.append(message)
         return None
 
-    def error(self, *_, **__):
+    def error(self, message: str = "", *_, **__):
+        self.error_messages.append(message)
         return None
 
     def text_area(self, label, *_, **__):
@@ -210,7 +214,7 @@ def test_run_app_uses_helper_when_button_clicked(monkeypatch):
     st_stub = _StreamlitStub()
     st_stub.text_area_value = "Sample contractor report"
     st_stub.button_states["Generate Reports"] = False
-    st_stub.button_states["Clean & Structure with Hugging Face"] = True
+    st_stub.button_states["Clean & Structure Offline"] = True
     monkeypatch.setattr(app, "st", st_stub)
 
     app.run_app()
@@ -218,3 +222,45 @@ def test_run_app_uses_helper_when_button_clicked(monkeypatch):
     assert captured_text == ["Sample contractor report"]
     assert st_stub.session_state["structured_report_data"] == canned_payload
     assert st_stub.json_value == canned_payload
+    assert st_stub.success_messages[-1] == "Report structured with the offline parser."
+
+
+def test_run_app_reports_parser_validation_errors(monkeypatch):
+    sheet_rows = [
+        HEADERS,
+        [
+            "2024-01-01",
+            "Site A",
+            "District 1",
+            "Work details A",
+            "Crew A",
+            "Supply A",
+            "Executed A",
+            "Comment A",
+            "Another Executed A",
+            "HSE A",
+            "Recommendation A",
+        ],
+    ]
+
+    monkeypatch.setattr(app, "get_sheet_data", lambda: sheet_rows)
+    monkeypatch.setattr(app, "load_offline_cache", lambda: None)
+    monkeypatch.setattr(app, "generate_reports", lambda *_, **__: b"zip-bytes")
+    monkeypatch.setattr(app, "set_background", lambda *_: None)
+    monkeypatch.setattr(app, "render_workwatch_header", lambda *_: None)
+
+    def fake_helper(_raw_text):
+        raise ValueError("Invalid section headers")
+
+    monkeypatch.setattr(app, "clean_and_structure_report", fake_helper)
+
+    st_stub = _StreamlitStub()
+    st_stub.text_area_value = "bad text"
+    st_stub.button_states["Generate Reports"] = False
+    st_stub.button_states["Clean & Structure Offline"] = True
+    monkeypatch.setattr(app, "st", st_stub)
+
+    app.run_app()
+
+    assert st_stub.warning_messages[-1] == "Offline parser validation error: Invalid section headers"
+    assert not st_stub.success_messages

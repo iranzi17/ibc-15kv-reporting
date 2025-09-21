@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-import chatgpt_helpers
+import report_structuring
 
 
 class DummyResponse:
@@ -23,13 +23,13 @@ class DummyResponse:
 
 def test_clean_and_structure_report_huggingface_payload(monkeypatch):
     raw_report = "Crew installed transformers."
-    prompt = chatgpt_helpers._PROMPT_TEMPLATE.format(
-        headers=", ".join(chatgpt_helpers.REPORT_HEADERS),
+    prompt = report_structuring._PROMPT_TEMPLATE.format(
+        headers=", ".join(report_structuring.REPORT_HEADERS),
         report_text=raw_report,
     )
     response_payload = {
         header: f"value-{index}"
-        for index, header in enumerate(chatgpt_helpers.REPORT_HEADERS)
+        for index, header in enumerate(report_structuring.REPORT_HEADERS)
     }
     generated_text = prompt + json.dumps(response_payload)
 
@@ -41,15 +41,15 @@ def test_clean_and_structure_report_huggingface_payload(monkeypatch):
         body = json.dumps([{"generated_text": generated_text}])
         return DummyResponse(body)
 
-    monkeypatch.setattr(chatgpt_helpers.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(report_structuring.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(
-        chatgpt_helpers.st,
+        report_structuring.st,
         "secrets",
         {"HUGGINGFACE_API_KEY": "hf-test-token"},
         raising=False,
     )
 
-    result = chatgpt_helpers.clean_and_structure_report(raw_report)
+    result = report_structuring.clean_and_structure_report(raw_report)
 
     assert result == response_payload
 
@@ -64,20 +64,15 @@ def test_clean_and_structure_report_huggingface_payload(monkeypatch):
 
 
 def test_clean_and_structure_report_missing_generated_text(monkeypatch):
-    monkeypatch.setattr(
-        chatgpt_helpers.st,
-        "secrets",
-        {"HUGGINGFACE_API_KEY": "hf-test-token"},
-        raising=False,
-    )
+    monkeypatch.setattr(report_structuring.st, "secrets", {"HUGGINGFACE_API_KEY": "hf-test-token"}, raising=False)
 
     def fake_urlopen(req, timeout):  # pragma: no cover - exercised via helper
         body = json.dumps([{"error": "Model is loading"}])
         return DummyResponse(body)
 
-    monkeypatch.setattr(chatgpt_helpers.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(report_structuring.request, "urlopen", fake_urlopen)
 
     with pytest.raises(RuntimeError) as excinfo:
-        chatgpt_helpers.clean_and_structure_report("data")
+        report_structuring.clean_and_structure_report("data")
 
     assert "Model is loading" in str(excinfo.value)
