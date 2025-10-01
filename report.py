@@ -91,6 +91,12 @@ def _mm_to_twips(mm_value: float) -> int:
     return max(0, int(round(twips)))
 
 
+def _px_to_mm(px: float) -> float:
+    """Convert pixels (at 96 DPI) to millimetres."""
+
+    return px * 25.4 / 96
+
+
 def _apply_cell_spacing(cell, spacing_mm: int) -> None:
     """Apply uniform cell margins in millimetres to a python-docx cell."""
 
@@ -120,6 +126,7 @@ def generate_reports(
     template_path: str = TEMPLATE_PATH,
 ) -> bytes:
     """Create a ZIP archive of rendered DOCX reports."""
+    TWO_COL_PIXEL_SIZES = [(819, 819), (613, 818)]
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
         for row in filtered_rows:
@@ -165,7 +172,12 @@ def generate_reports(
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
                             picture = run.add_picture(img_path)
-                            picture.width = Mm(target_width_mm)
+                            if img_per_row == 2 and col_idx < len(TWO_COL_PIXEL_SIZES):
+                                width_px, height_px = TWO_COL_PIXEL_SIZES[col_idx]
+                                picture.width = Mm(_px_to_mm(width_px))
+                                picture.height = Mm(_px_to_mm(height_px))
+                            else:
+                                picture.width = Mm(target_width_mm)
                             if add_border:
                                 from docx.oxml import parse_xml
 

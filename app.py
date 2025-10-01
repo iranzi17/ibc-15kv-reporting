@@ -51,6 +51,9 @@ def run_app():
     img_per_row = st.sidebar.selectbox(
         "Images per row", options=[1, 2, 3, 4], index=1
     )
+    st.sidebar.caption(
+        "Selecting two images per row enforces fixed sizing (819×819 px left, 613×818 px right)."
+    )
     add_border = st.sidebar.checkbox("Add border to images", value=False)
     spacing_mm = st.sidebar.slider(
         "Spacing between images (mm)", min_value=0, max_value=20, value=2, step=1
