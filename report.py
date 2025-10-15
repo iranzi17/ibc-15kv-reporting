@@ -117,22 +117,38 @@ def _mm_to_twips(mm_value: float) -> int:
     return max(0, int(round(twips)))
 
 
-def _apply_cell_spacing(cell, spacing_mm: int) -> None:
-    """Apply uniform cell margins in millimetres to a python-docx cell."""
+def _set_cell_margin(cell, side: str, value_mm: float) -> None:
+    """Set an individual cell margin in millimetres."""
 
-    twips = _mm_to_twips(spacing_mm)
     tc_pr = cell._element.get_or_add_tcPr()
     tc_mar = tc_pr.find(qn("w:tcMar"))
     if tc_mar is None:
         tc_mar = OxmlElement("w:tcMar")
         tc_pr.append(tc_mar)
-    for side in ("top", "left", "bottom", "right"):
-        margin = tc_mar.find(qn(f"w:{side}"))
-        if margin is None:
-            margin = OxmlElement(f"w:{side}")
-            tc_mar.append(margin)
-        margin.set(qn("w:w"), str(twips))
-        margin.set(qn("w:type"), "dxa")
+    margin = tc_mar.find(qn(f"w:{side}"))
+    if margin is None:
+        margin = OxmlElement(f"w:{side}")
+        tc_mar.append(margin)
+    margin.set(qn("w:w"), str(_mm_to_twips(value_mm)))
+    margin.set(qn("w:type"), "dxa")
+
+
+def _apply_cell_spacing(cell, spacing_mm: float, column_index: int, total_columns: int) -> tuple[float, float]:
+    """Apply asymmetric margins that create an even gap between images."""
+
+    spacing_mm = max(0.0, float(spacing_mm))
+    top_bottom = spacing_mm
+    if total_columns <= 1:
+        left = right = spacing_mm
+    else:
+        inner_gap = spacing_mm / 2.0
+        left = spacing_mm if column_index == 0 else inner_gap
+        right = spacing_mm if column_index == total_columns - 1 else inner_gap
+
+    for side, value in ("top", top_bottom), ("bottom", top_bottom), ("left", left), ("right", right):
+        _set_cell_margin(cell, side, value)
+
+    return left, right
 
 
 def generate_reports(
@@ -198,16 +214,27 @@ def generate_reports(
                     tmp_img.flush()
                     row_cells.append(tmp_img.name)
                 if (idx + 1) % img_per_row == 0 or idx == len(image_bytes) - 1:
+                    columns_in_row = max(1, len(row_cells))
                     table = images_subdoc.add_table(rows=1, cols=img_per_row)
+                    table.autofit = False
                     for col_idx in range(img_per_row):
                         cell = table.rows[0].cells[col_idx]
-                        _apply_cell_spacing(cell, spacing_mm)
+                        effective_index = min(col_idx, columns_in_row - 1)
+                        left_margin, right_margin = _apply_cell_spacing(
+                            cell, spacing_mm, effective_index, columns_in_row
+                        )
                         if col_idx < len(row_cells):
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
                             picture = run.add_picture(img_path)
                             picture.width = Mm(target_width_mm)
                             picture.height = Mm(target_height_mm)
+                            try:
+                                table.columns[col_idx].width = Mm(
+                                    target_width_mm + left_margin + right_margin
+                                )
+                            except IndexError:
+                                pass
                             if add_border:
                                 from docx.oxml import parse_xml
 
