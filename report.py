@@ -14,6 +14,7 @@ from docx.shared import Mm
 from config import TEMPLATE_PATH
 
 BASE_DIR = Path(__file__).parent.resolve()
+EMU_PER_MM = Mm(1).emu
 
 SIGNATORIES = {
     "Civil": {
@@ -188,8 +189,7 @@ def generate_reports(
             date = date.strip()
 
             tpl = DocxTemplate(sanitized_template)
-            target_width_mm = max(1, img_width_mm)
-            target_height_mm = max(1, img_height_mm)
+
             required = {
                 "Consultant_Name",
                 "Consultant_Title",
@@ -223,18 +223,12 @@ def generate_reports(
                         left_margin, right_margin = _apply_cell_spacing(
                             cell, spacing_mm, effective_index, columns_in_row
                         )
+
                         if col_idx < len(row_cells):
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
                             picture = run.add_picture(img_path)
-                            picture.width = Mm(target_width_mm)
-                            picture.height = Mm(target_height_mm)
-                            try:
-                                table.columns[col_idx].width = Mm(
-                                    target_width_mm + left_margin + right_margin
-                                )
-                            except IndexError:
-                                pass
+
                             if add_border:
                                 from docx.oxml import parse_xml
 
@@ -252,6 +246,12 @@ def generate_reports(
                                 os.remove(img_path)
                             except Exception:
                                 pass
+                        try:
+                            table.columns[col_idx].width = Mm(
+                                content_width_mm + left_margin + right_margin
+                            )
+                        except IndexError:
+                            pass
                     row_cells = []
                     if (idx + 1) % (img_per_row * 2) == 0 and idx != len(image_bytes) - 1:
                         images_subdoc.add_page_break()
