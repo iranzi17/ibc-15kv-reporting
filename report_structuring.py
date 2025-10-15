@@ -16,6 +16,9 @@ REPORT_HEADERS: List[str] = [
     "Another_Work_Executed",
     "Comment_on_HSE",
     "Consultant_Recommandation",
+    "Non_Compliant_work",
+    "Reaction_and_WayForword",
+    "challenges",
 ]
 
 # Normalised header names mapped to the canonical header used in REPORT_HEADERS.
@@ -40,6 +43,16 @@ _HEADER_ALIASES.update(
         "consultant_recommendations": "Consultant_Recommandation",
         "work_executed": "Work_Executed",
         "another_work_executed": "Another_Work_Executed",
+        "non_compliant_work": "Non_Compliant_work",
+        "non_compliance_work": "Non_Compliant_work",
+        "reaction_way_forword": "Reaction_and_WayForword",
+        "reaction_way_forward": "Reaction_and_WayForword",
+        "reaction_and_way_forward": "Reaction_and_WayForword",
+        "reaction_and_wayforword": "Reaction_and_WayForword",
+        "reaction_wayforward": "Reaction_and_WayForword",
+        "reaction_wayforword": "Reaction_and_WayForword",
+        "challenge": "challenges",
+        "challenges": "challenges",
     }
 )
 
@@ -133,6 +146,12 @@ def _resolve_header(raw_key: str) -> str | None:
     return _HEADER_ALIASES.get(normalised_key)
 
 
+def resolve_report_header_name(raw_key: str) -> str | None:
+    """Public helper that exposes :func:`_resolve_header` for reuse."""
+
+    return _resolve_header(raw_key)
+
+
 def _append_value(current: str, addition: str) -> str:
     """Append ``addition`` to ``current`` separated by a newline if needed."""
 
@@ -144,4 +163,8 @@ def _append_value(current: str, addition: str) -> str:
     return f"{current}\n{addition}"
 
 
-__all__ = ["REPORT_HEADERS", "clean_and_structure_report"]
+__all__ = [
+    "REPORT_HEADERS",
+    "clean_and_structure_report",
+    "resolve_report_header_name",
+]

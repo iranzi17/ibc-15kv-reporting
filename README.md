@@ -48,17 +48,26 @@ SHEET_NAME = "Reports"
 ## Google Sheet Setup
 
 The app expects data in a Google Sheet named **Reports**. Columns **A** through
-**F** should have the following headings starting in row&nbsp;1:
+**N** should have the following headings starting in row&nbsp;1. Use the exact
+names shown below so the app can map your data automatically:
 
-1. **Site Name** – Name of the site.
-2. **Date** – The report date in `dd.mm.YYYY`, `dd/mm/YYYY`, or `YYYY-mm-dd`
+1. **Date** – The report date in `dd.mm.YYYY`, `dd/mm/YYYY`, or `YYYY-mm-dd`
    format.
-3. **Civil Works** – Notes on civil activities.
-4. **General recommendation** – Electrical or other recommendations for the
-   site.
-5. **Comments about the activities performed and challenges faced** – Detailed
-   comments on daily progress.
-6. **Challenges** – Issues encountered on site.
+2. **Site_Name** – Name of the site.
+3. **District** – District or location of the site.
+4. **Work** – Summary of planned or ongoing work.
+5. **Human_Resources** – Staffing information for the day.
+6. **Supply** – Materials delivered or required.
+7. **Work_Executed** – Activities executed during the day.
+8. **Comment_on_work** – Additional notes about the work performed.
+9. **Another_Work_Executed** – Any supplementary tasks completed.
+10. **Comment_on_HSE** – Health, safety, and environment notes.
+11. **Consultant_Recommandation** – Recommendations from the consultant.
+12. **Non_Compliant_work** – Items that do not meet compliance expectations.
+13. **Reaction_and_WayForword** – Follow-up actions or responses (the template
+    previously labelled this column as “Reaction & Way Forward”).
+14. **challenges** – Issues encountered on site.
 
 The application reads rows starting from **A2** and expects the above order. If
-any columns are missing, empty strings will be substituted.
+any columns are missing, empty strings will be substituted when generating
+reports.

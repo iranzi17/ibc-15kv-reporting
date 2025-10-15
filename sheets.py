@@ -48,10 +48,11 @@ def get_sheet_data() -> List[List[str]]:
     sheet = service.spreadsheets()
     result = sheet.values().get(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A:K",
+        range=f"{SHEET_NAME}!A:N",
     ).execute()
     rows = result.get("values", [])
-    padded_rows = [row + [""] * (11 - len(row)) for row in rows]
+    expected_cols = 14
+    padded_rows = [row + [""] * max(0, expected_cols - len(row)) for row in rows]
     return padded_rows
 
 

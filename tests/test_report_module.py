@@ -22,8 +22,12 @@ def test_format_date_title():
     assert report.format_date_title('06/08/2025') == '06.08.2025'
 
 
+def _empty_row(site: str, date: str) -> list[str]:
+    return [date, site] + [""] * 12
+
+
 def test_generate_reports_returns_zip():
-    rows = [["2025-08-06", "Site A", "", "", "", "", "", "", "", "", ""]]
+    rows = [_empty_row("Site A", "2025-08-06")]
     uploaded = {}
     data = report.generate_reports(rows, uploaded, 'Civil', 70, 2, 2, False)
     with zipfile.ZipFile(BytesIO(data)) as zf:
@@ -33,7 +37,7 @@ def test_generate_reports_returns_zip():
 
 
 def test_generate_reports_respects_width_and_spacing():
-    rows = [["2025-08-06", "Site A", "", "", "", "", "", "", "", "", ""]]
+    rows = [_empty_row("Site A", "2025-08-06")]
     uploaded = {("Site A", "2025-08-06"): [SAMPLE_PNG]}
     width_mm = 42
     spacing_mm = 5
