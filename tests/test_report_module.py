@@ -29,7 +29,7 @@ def _empty_row(site: str, date: str) -> list[str]:
 def test_generate_reports_returns_zip():
     rows = [_empty_row("Site A", "2025-08-06")]
     uploaded = {}
-    data = report.generate_reports(rows, uploaded, 'Civil', 70, 2, 2, False)
+    data = report.generate_reports(rows, uploaded, 'Civil', 70, 60, 2, 2, False)
     with zipfile.ZipFile(BytesIO(data)) as zf:
         names = zf.namelist()
     assert len(names) == 1
@@ -40,12 +40,14 @@ def test_generate_reports_respects_width_and_spacing():
     rows = [_empty_row("Site A", "2025-08-06")]
     uploaded = {("Site A", "2025-08-06"): [SAMPLE_PNG]}
     width_mm = 42
+    height_mm = 25
     spacing_mm = 5
     data = report.generate_reports(
         rows,
         uploaded,
         "Civil",
         width_mm,
+        height_mm,
         spacing_mm,
         img_per_row=1,
         add_border=False,
@@ -57,6 +59,8 @@ def test_generate_reports_respects_width_and_spacing():
     document = Document(BytesIO(doc_bytes))
     widths = [shape.width for shape in document.inline_shapes]
     assert Mm(width_mm) in widths
+    heights = [shape.height for shape in document.inline_shapes]
+    assert Mm(height_mm) in heights
 
     expected_twips = int(round(spacing_mm * 1440 / 25.4))
     with zipfile.ZipFile(BytesIO(doc_bytes)) as doc_archive:

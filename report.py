@@ -117,12 +117,6 @@ def _mm_to_twips(mm_value: float) -> int:
     return max(0, int(round(twips)))
 
 
-def _px_to_mm(px: float) -> float:
-    """Convert pixels (at 96 DPI) to millimetres."""
-
-    return px * 25.4 / 96
-
-
 def _apply_cell_spacing(cell, spacing_mm: int) -> None:
     """Apply uniform cell margins in millimetres to a python-docx cell."""
 
@@ -146,13 +140,13 @@ def generate_reports(
     uploaded_image_mapping: Dict[tuple, List[bytes]],
     discipline: str,
     img_width_mm: int,
+    img_height_mm: int,
     spacing_mm: int,
     img_per_row: int = 2,
     add_border: bool = False,
     template_path: str = TEMPLATE_PATH,
 ) -> bytes:
     """Create a ZIP archive of rendered DOCX reports."""
-    TWO_COL_PIXEL_SIZES = [(819, 819), (613, 818)]
     zip_buffer = BytesIO()
     sanitized_template = _create_sanitized_template_copy(template_path)
     try:
@@ -179,6 +173,7 @@ def generate_reports(
 
             tpl = DocxTemplate(sanitized_template)
             target_width_mm = max(1, img_width_mm)
+            target_height_mm = max(1, img_height_mm)
             required = {
                 "Consultant_Name",
                 "Consultant_Title",
@@ -211,12 +206,8 @@ def generate_reports(
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
                             picture = run.add_picture(img_path)
-                            if img_per_row == 2 and col_idx < len(TWO_COL_PIXEL_SIZES):
-                                width_px, height_px = TWO_COL_PIXEL_SIZES[col_idx]
-                                picture.width = Mm(_px_to_mm(width_px))
-                                picture.height = Mm(_px_to_mm(height_px))
-                            else:
-                                picture.width = Mm(target_width_mm)
+                            picture.width = Mm(target_width_mm)
+                            picture.height = Mm(target_height_mm)
                             if add_border:
                                 from docx.oxml import parse_xml
 
