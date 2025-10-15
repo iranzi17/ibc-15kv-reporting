@@ -189,10 +189,7 @@ def generate_reports(
             date = date.strip()
 
             tpl = DocxTemplate(sanitized_template)
-            target_width_mm = max(1.0, float(img_width_mm))
-            target_height_mm = max(1.0, float(img_height_mm))
-            max_width_emu = int(round(target_width_mm * EMU_PER_MM))
-            max_height_emu = int(round(target_height_mm * EMU_PER_MM))
+
             required = {
                 "Consultant_Name",
                 "Consultant_Title",
@@ -226,31 +223,12 @@ def generate_reports(
                         left_margin, right_margin = _apply_cell_spacing(
                             cell, spacing_mm, effective_index, columns_in_row
                         )
-                        content_width_mm = target_width_mm
+
                         if col_idx < len(row_cells):
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
                             picture = run.add_picture(img_path)
-                            width_emu = max(1, int(picture.width))
-                            height_emu = max(1, int(picture.height))
 
-                            scale = None
-                            if max_width_emu:
-                                width_scale = max_width_emu / width_emu
-                                scale = width_scale if scale is None else min(scale, width_scale)
-                            if max_height_emu:
-                                height_scale = max_height_emu / height_emu
-                                scale = height_scale if scale is None else min(scale, height_scale)
-
-                            if scale is not None:
-                                new_width = int(round(width_emu * scale))
-                                new_height = int(round(height_emu * scale))
-                                picture.width = new_width
-                                picture.height = new_height
-                                width_emu = new_width
-                                height_emu = new_height
-
-                            content_width_mm = width_emu / EMU_PER_MM
                             if add_border:
                                 from docx.oxml import parse_xml
 
