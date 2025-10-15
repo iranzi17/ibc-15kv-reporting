@@ -13,6 +13,9 @@ HEADERS = [
     "Another_Work_Executed",
     "Comment_on_HSE",
     "Consultant_Recommandation",
+    "Non_Compliant_work",
+    "Reaction_and_WayForword",
+    "challenges",
 ]
 
 
@@ -36,6 +39,9 @@ class _SidebarStub:
 
     def checkbox(self, *_, value=False, **__):
         return value
+
+    def caption(self, *_, **__):
+        return None
 
 
 class _StreamlitStub:
@@ -121,6 +127,9 @@ def test_run_app_excludes_header_rows(monkeypatch):
             "Another Executed A",
             "HSE A",
             "Recommendation A",
+            "Non compliant A",
+            "Reaction A",
+            "Challenges A",
         ],
         [
             "2024-01-02",
@@ -134,6 +143,9 @@ def test_run_app_excludes_header_rows(monkeypatch):
             "Another Executed B",
             "HSE B",
             "Recommendation B",
+            "Non compliant B",
+            "Reaction B",
+            "Challenges B",
         ],
     ]
 
@@ -189,6 +201,9 @@ def test_run_app_uses_helper_when_button_clicked(monkeypatch):
             "Another Executed A",
             "HSE A",
             "Recommendation A",
+            "Non compliant A",
+            "Reaction A",
+            "Challenges A",
         ],
     ]
 

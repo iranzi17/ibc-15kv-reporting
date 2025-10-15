@@ -34,6 +34,10 @@ SIGNATORIES = {
     },
 }
 
+PLACEHOLDER_REPLACEMENTS = {
+    "Reaction&amp;WayForword": "Reaction_and_WayForword",
+}
+
 
 def safe_filename(s: str, max_len: int = 150) -> str:
     """Remove illegal filename characters and tidy whitespace."""
@@ -84,6 +88,28 @@ def resolve_asset(name: Optional[str]) -> Optional[str]:
     return None
 
 
+def _create_sanitized_template_copy(template_path: str) -> str:
+    """Return a temporary copy of the template with problematic placeholders normalised."""
+
+    with zipfile.ZipFile(template_path, "r") as src, tempfile.NamedTemporaryFile(
+        delete=False, suffix=".docx"
+    ) as tmp:
+        with zipfile.ZipFile(tmp, "w") as dst:
+            for item in src.infolist():
+                data = src.read(item.filename)
+                if item.filename.endswith(".xml") and PLACEHOLDER_REPLACEMENTS:
+                    try:
+                        text = data.decode("utf-8")
+                    except UnicodeDecodeError:
+                        pass
+                    else:
+                        for old, new in PLACEHOLDER_REPLACEMENTS.items():
+                            text = text.replace(old, new)
+                        data = text.encode("utf-8")
+                dst.writestr(item, data)
+    return tmp.name
+
+
 def _mm_to_twips(mm_value: float) -> int:
     """Convert millimetres to Word twips (1/20th of a point)."""
 
@@ -128,17 +154,30 @@ def generate_reports(
     """Create a ZIP archive of rendered DOCX reports."""
     TWO_COL_PIXEL_SIZES = [(819, 819), (613, 818)]
     zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        for row in filtered_rows:
-            (
-                date, site_name, district, work, human_resources, supply,
-                work_executed, comment_on_work, another_work_executed,
-                comment_on_hse, consultant_recommandation
-            ) = (row + [""] * 11)[:11]
+    sanitized_template = _create_sanitized_template_copy(template_path)
+    try:
+        with zipfile.ZipFile(zip_buffer, "w") as zipf:
+            for row in filtered_rows:
+                (
+                    date,
+                    site_name,
+                    district,
+                    work,
+                    human_resources,
+                    supply,
+                    work_executed,
+                    comment_on_work,
+                    another_work_executed,
+                    comment_on_hse,
+                    consultant_recommandation,
+                    non_compliant_work,
+                    reaction_way_forward,
+                    challenges,
+                ) = (row + [""] * 14)[:14]
             site_name = site_name.strip()
             date = date.strip()
 
-            tpl = DocxTemplate(template_path)
+            tpl = DocxTemplate(sanitized_template)
             target_width_mm = max(1, img_width_mm)
             required = {
                 "Consultant_Name",
@@ -217,6 +256,9 @@ def generate_reports(
                 "Another_Work_Executed": another_work_executed,
                 "Comment_on_HSE": comment_on_hse,
                 "Consultant_Recommandation": consultant_recommandation,
+                "Non_Compliant_work": non_compliant_work,
+                "Reaction_and_WayForword": reaction_way_forward,
+                "challenges": challenges,
                 "Consultant_Name": sign_info.get("Consultant_Name", ""),
                 "Consultant_Title": sign_info.get("Consultant_Title", ""),
                 "Contractor_Name": sign_info.get("Contractor_Name", ""),
@@ -226,11 +268,19 @@ def generate_reports(
                 "Images": images_subdoc,
             }
 
+            # Backwards compatibility for templates that still use the unsanitised placeholder.
+            ctx["Reaction&WayForword"] = reaction_way_forward
+
             tpl.render(ctx)
             out_name = safe_filename(f"{site_name}_{format_date_title(date)}.docx")
             with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
                 tpl.save(tmp_docx.name)
                 zipf.write(tmp_docx.name, arcname=out_name)
                 os.remove(tmp_docx.name)
+    finally:
+        try:
+            os.remove(sanitized_template)
+        except OSError:
+            pass
     zip_buffer.seek(0)
     return zip_buffer.getvalue()

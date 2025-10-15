@@ -15,7 +15,11 @@ from sheets import (
 
 from ui import render_workwatch_header, set_background
 from report import generate_reports
-from report_structuring import REPORT_HEADERS, clean_and_structure_report
+from report_structuring import (
+    REPORT_HEADERS,
+    clean_and_structure_report,
+    resolve_report_header_name,
+)
 
 
 def get_gsheet(sheet_id: str, sheet_name: str):
@@ -32,7 +36,13 @@ def append_to_sheet(row_data: dict, sheet):
     if not headers:
         raise ValueError("Worksheet must have a header row to append data.")
 
-    ordered_row = [row_data.get(header, "") for header in headers]
+    ordered_row = []
+    for header in headers:
+        canonical = resolve_report_header_name(header) or header
+        if canonical in row_data:
+            ordered_row.append(row_data.get(canonical, ""))
+        else:
+            ordered_row.append(row_data.get(header, ""))
     sheet.append_row(ordered_row)
 
 
