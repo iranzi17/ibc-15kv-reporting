@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 REPORT_HEADERS: List[str] = [
     "Date",
@@ -112,7 +112,7 @@ def _parse_section(section: str) -> Dict[str, str]:
     """Parse an individual section into the canonical report headers."""
 
     result: Dict[str, str] = {header: "" for header in REPORT_HEADERS}
-    current_header: str | None = None
+    current_header: Optional[str] = None
 
     for raw_line in section.splitlines():
         line = raw_line.strip()
@@ -137,7 +137,7 @@ def _parse_section(section: str) -> Dict[str, str]:
     return result
 
 
-def _resolve_header(raw_key: str) -> str | None:
+def _resolve_header(raw_key: str) -> Optional[str]:
     """Return the canonical header name for the provided key string."""
 
     normalised_key = re.sub(r"[^a-z0-9]+", "_", raw_key.lower()).strip("_")
@@ -146,7 +146,7 @@ def _resolve_header(raw_key: str) -> str | None:
     return _HEADER_ALIASES.get(normalised_key)
 
 
-def resolve_report_header_name(raw_key: str) -> str | None:
+def resolve_report_header_name(raw_key: str) -> Optional[str]:
     """Public helper that exposes :func:`_resolve_header` for reuse."""
 
     return _resolve_header(raw_key)
