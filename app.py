@@ -56,17 +56,17 @@ def run_app():
     # Controls that were mistakenly embedded in HTML in original file:
     st.sidebar.subheader("Gallery Controls")
     img_width_mm = st.sidebar.slider(
-        "Image width (mm)", min_value=30, max_value=100, value=70, step=5
+        "Image width (mm)", min_value=50, max_value=250, value=185, step=5
     )
-    img_per_row = st.sidebar.selectbox(
-        "Images per row", options=[1, 2, 3, 4], index=1
+    img_height_mm = st.sidebar.slider(
+        "Image height (mm)", min_value=50, max_value=250, value=148, step=5
     )
     st.sidebar.caption(
-        "Selecting two images per row enforces fixed sizing (819×819 px left, 613×818 px right)."
+        "Images default to 185 mm × 148 mm each, arranged two per row with a 5 mm gap."
     )
     add_border = st.sidebar.checkbox("Add border to images", value=False)
     spacing_mm = st.sidebar.slider(
-        "Spacing between images (mm)", min_value=0, max_value=20, value=2, step=1
+        "Gap between images (mm)", min_value=0, max_value=20, value=5, step=1
     )
 
     # Get sheet data
@@ -176,9 +176,10 @@ def run_app():
             st.session_state.get("images", {}),
             discipline,
             img_width_mm,
+            img_height_mm,
             spacing_mm,
-            img_per_row,
-            add_border,
+            img_per_row=2,
+            add_border=add_border,
         )
         st.download_button("Download ZIP", zip_bytes, "reports.zip")
 

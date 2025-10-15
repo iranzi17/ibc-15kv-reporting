@@ -14,6 +14,7 @@ from docx.shared import Mm
 from config import TEMPLATE_PATH
 
 BASE_DIR = Path(__file__).parent.resolve()
+EMU_PER_MM = Mm(1).emu
 
 SIGNATORIES = {
     "Civil": {
@@ -117,28 +118,38 @@ def _mm_to_twips(mm_value: float) -> int:
     return max(0, int(round(twips)))
 
 
-def _px_to_mm(px: float) -> float:
-    """Convert pixels (at 96 DPI) to millimetres."""
+def _set_cell_margin(cell, side: str, value_mm: float) -> None:
+    """Set an individual cell margin in millimetres."""
 
-    return px * 25.4 / 96
-
-
-def _apply_cell_spacing(cell, spacing_mm: int) -> None:
-    """Apply uniform cell margins in millimetres to a python-docx cell."""
-
-    twips = _mm_to_twips(spacing_mm)
     tc_pr = cell._element.get_or_add_tcPr()
     tc_mar = tc_pr.find(qn("w:tcMar"))
     if tc_mar is None:
         tc_mar = OxmlElement("w:tcMar")
         tc_pr.append(tc_mar)
-    for side in ("top", "left", "bottom", "right"):
-        margin = tc_mar.find(qn(f"w:{side}"))
-        if margin is None:
-            margin = OxmlElement(f"w:{side}")
-            tc_mar.append(margin)
-        margin.set(qn("w:w"), str(twips))
-        margin.set(qn("w:type"), "dxa")
+    margin = tc_mar.find(qn(f"w:{side}"))
+    if margin is None:
+        margin = OxmlElement(f"w:{side}")
+        tc_mar.append(margin)
+    margin.set(qn("w:w"), str(_mm_to_twips(value_mm)))
+    margin.set(qn("w:type"), "dxa")
+
+
+def _apply_cell_spacing(cell, spacing_mm: float, column_index: int, total_columns: int) -> tuple[float, float]:
+    """Apply asymmetric margins that create an even gap between images."""
+
+    spacing_mm = max(0.0, float(spacing_mm))
+    top_bottom = spacing_mm
+    if total_columns <= 1:
+        left = right = spacing_mm
+    else:
+        inner_gap = spacing_mm / 2.0
+        left = spacing_mm if column_index == 0 else inner_gap
+        right = spacing_mm if column_index == total_columns - 1 else inner_gap
+
+    for side, value in ("top", top_bottom), ("bottom", top_bottom), ("left", left), ("right", right):
+        _set_cell_margin(cell, side, value)
+
+    return left, right
 
 
 def generate_reports(
@@ -146,13 +157,13 @@ def generate_reports(
     uploaded_image_mapping: Dict[tuple, List[bytes]],
     discipline: str,
     img_width_mm: int,
+    img_height_mm: int,
     spacing_mm: int,
     img_per_row: int = 2,
     add_border: bool = False,
     template_path: str = TEMPLATE_PATH,
 ) -> bytes:
     """Create a ZIP archive of rendered DOCX reports."""
-    TWO_COL_PIXEL_SIZES = [(819, 819), (613, 818)]
     zip_buffer = BytesIO()
     sanitized_template = _create_sanitized_template_copy(template_path)
     try:
@@ -178,7 +189,10 @@ def generate_reports(
             date = date.strip()
 
             tpl = DocxTemplate(sanitized_template)
-            target_width_mm = max(1, img_width_mm)
+            target_width_mm = max(1.0, float(img_width_mm))
+            target_height_mm = max(1.0, float(img_height_mm))
+            max_width_emu = int(round(target_width_mm * EMU_PER_MM))
+            max_height_emu = int(round(target_height_mm * EMU_PER_MM))
             required = {
                 "Consultant_Name",
                 "Consultant_Title",
@@ -203,20 +217,40 @@ def generate_reports(
                     tmp_img.flush()
                     row_cells.append(tmp_img.name)
                 if (idx + 1) % img_per_row == 0 or idx == len(image_bytes) - 1:
+                    columns_in_row = max(1, len(row_cells))
                     table = images_subdoc.add_table(rows=1, cols=img_per_row)
+                    table.autofit = False
                     for col_idx in range(img_per_row):
                         cell = table.rows[0].cells[col_idx]
-                        _apply_cell_spacing(cell, spacing_mm)
+                        effective_index = min(col_idx, columns_in_row - 1)
+                        left_margin, right_margin = _apply_cell_spacing(
+                            cell, spacing_mm, effective_index, columns_in_row
+                        )
+                        content_width_mm = target_width_mm
                         if col_idx < len(row_cells):
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
                             picture = run.add_picture(img_path)
-                            if img_per_row == 2 and col_idx < len(TWO_COL_PIXEL_SIZES):
-                                width_px, height_px = TWO_COL_PIXEL_SIZES[col_idx]
-                                picture.width = Mm(_px_to_mm(width_px))
-                                picture.height = Mm(_px_to_mm(height_px))
-                            else:
-                                picture.width = Mm(target_width_mm)
+                            width_emu = max(1, int(picture.width))
+                            height_emu = max(1, int(picture.height))
+
+                            scale = None
+                            if max_width_emu:
+                                width_scale = max_width_emu / width_emu
+                                scale = width_scale if scale is None else min(scale, width_scale)
+                            if max_height_emu:
+                                height_scale = max_height_emu / height_emu
+                                scale = height_scale if scale is None else min(scale, height_scale)
+
+                            if scale is not None:
+                                new_width = int(round(width_emu * scale))
+                                new_height = int(round(height_emu * scale))
+                                picture.width = new_width
+                                picture.height = new_height
+                                width_emu = new_width
+                                height_emu = new_height
+
+                            content_width_mm = width_emu / EMU_PER_MM
                             if add_border:
                                 from docx.oxml import parse_xml
 
@@ -234,6 +268,12 @@ def generate_reports(
                                 os.remove(img_path)
                             except Exception:
                                 pass
+                        try:
+                            table.columns[col_idx].width = Mm(
+                                content_width_mm + left_margin + right_margin
+                            )
+                        except IndexError:
+                            pass
                     row_cells = []
                     if (idx + 1) % (img_per_row * 2) == 0 and idx != len(image_bytes) - 1:
                         images_subdoc.add_page_break()

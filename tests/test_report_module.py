@@ -1,17 +1,23 @@
-import base64
 from io import BytesIO
 import zipfile
 import xml.etree.ElementTree as ET
 
 from docx import Document
 from docx.shared import Mm
+from PIL import Image
+import pytest
 
 import report
 
 
-SAMPLE_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABDQottAAAAABJRU5ErkJggg=="
-)
+def _png_bytes(width: int, height: int, color: tuple[int, int, int] = (255, 0, 0)) -> bytes:
+    image = Image.new("RGB", (width, height), color)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+SQUARE_PNG = _png_bytes(200, 200)
 
 
 def test_safe_filename():
@@ -29,7 +35,7 @@ def _empty_row(site: str, date: str) -> list[str]:
 def test_generate_reports_returns_zip():
     rows = [_empty_row("Site A", "2025-08-06")]
     uploaded = {}
-    data = report.generate_reports(rows, uploaded, 'Civil', 70, 2, 2, False)
+    data = report.generate_reports(rows, uploaded, 'Civil', 70, 60, 2, 2, False)
     with zipfile.ZipFile(BytesIO(data)) as zf:
         names = zf.namelist()
     assert len(names) == 1
@@ -38,14 +44,16 @@ def test_generate_reports_returns_zip():
 
 def test_generate_reports_respects_width_and_spacing():
     rows = [_empty_row("Site A", "2025-08-06")]
-    uploaded = {("Site A", "2025-08-06"): [SAMPLE_PNG]}
+    uploaded = {("Site A", "2025-08-06"): [SQUARE_PNG]}
     width_mm = 42
+    height_mm = 25
     spacing_mm = 5
     data = report.generate_reports(
         rows,
         uploaded,
         "Civil",
         width_mm,
+        height_mm,
         spacing_mm,
         img_per_row=1,
         add_border=False,
@@ -55,24 +63,112 @@ def test_generate_reports_respects_width_and_spacing():
         doc_bytes = zf.read(docx_name)
 
     document = Document(BytesIO(doc_bytes))
-    widths = [shape.width for shape in document.inline_shapes]
-    assert Mm(width_mm) in widths
+    max_width_emu = Mm(width_mm).emu
+    max_height_emu = Mm(height_mm).emu
+    tolerance = 1  # 1 EMU ≈ 0.0003 mm
 
-    expected_twips = int(round(spacing_mm * 1440 / 25.4))
+    matching_shapes = [
+        shape
+        for shape in document.inline_shapes
+        if shape.width <= max_width_emu + tolerance
+        and shape.height <= max_height_emu + tolerance
+    ]
+    assert matching_shapes, "Expected at least one gallery image within configured bounds"
+    assert any(
+        abs(shape.width - max_width_emu) <= tolerance
+        or abs(shape.height - max_height_emu) <= tolerance
+        for shape in matching_shapes
+    ), "At least one dimension should touch the configured bound"
+
+    expected_twips = str(report._mm_to_twips(spacing_mm))
     with zipfile.ZipFile(BytesIO(doc_bytes)) as doc_archive:
         document_xml = doc_archive.read("word/document.xml")
+
     root = ET.fromstring(document_xml)
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-    expected_str = str(expected_twips)
-    margin_tags = {
-        f"{{{ns['w']}}}{side}" for side in ("top", "left", "bottom", "right")
-    }
-    found_spacing = False
+    margin_sets = []
     for tc_mar in root.findall(".//w:tcMar", ns):
-        margins = {child.tag: child.get(f"{{{ns['w']}}}w") for child in tc_mar}
-        if margin_tags.issubset(margins.keys()) and all(
-            margins[tag] == expected_str for tag in margin_tags
-        ):
-            found_spacing = True
-            break
-    assert found_spacing, "Expected to find table cell margins matching the configured spacing"
+        values = {child.tag.split("}")[-1]: child.get(f"{{{ns['w']}}}w") for child in tc_mar}
+        margin_sets.append(values)
+
+    assert any(
+        margins.get("left") == margins.get("right") == margins.get("top") == margins.get("bottom") == expected_twips
+        for margins in margin_sets
+    ), "Expected symmetric margins matching the configured spacing"
+
+
+def test_generate_reports_two_images_gap_distribution():
+    rows = [_empty_row("Site A", "2025-08-06")]
+    uploaded = {("Site A", "2025-08-06"): [SQUARE_PNG, SQUARE_PNG]}
+    spacing_mm = 5
+    data = report.generate_reports(
+        rows,
+        uploaded,
+        "Civil",
+        185,
+        148,
+        spacing_mm,
+        img_per_row=2,
+        add_border=False,
+    )
+
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        docx_name = zf.namelist()[0]
+        doc_bytes = zf.read(docx_name)
+
+    with zipfile.ZipFile(BytesIO(doc_bytes)) as doc_archive:
+        document_xml = doc_archive.read("word/document.xml")
+
+    root = ET.fromstring(document_xml)
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    margin_sets = []
+    for tc_mar in root.findall(".//w:tcMar", ns):
+        values = {child.tag.split("}")[-1]: child.get(f"{{{ns['w']}}}w") for child in tc_mar}
+        margin_sets.append(values)
+
+    outer = str(report._mm_to_twips(spacing_mm))
+    inner = str(report._mm_to_twips(spacing_mm / 2))
+
+    assert any(
+        margins.get("left") == outer and margins.get("right") == inner for margins in margin_sets
+    ), "Expected left cell to keep full outer margin and inner half-gap"
+    assert any(
+        margins.get("left") == inner and margins.get("right") == outer for margins in margin_sets
+    ), "Expected right cell to keep inner half-gap and full outer margin"
+
+
+def test_generate_reports_preserves_aspect_ratio():
+    rows = [_empty_row("Site A", "2025-08-06")]
+    wide_png = _png_bytes(600, 300)
+    uploaded = {("Site A", "2025-08-06"): [wide_png]}
+    width_mm = 185
+    height_mm = 148
+
+    data = report.generate_reports(
+        rows,
+        uploaded,
+        "Civil",
+        width_mm,
+        height_mm,
+        spacing_mm=5,
+        img_per_row=2,
+        add_border=False,
+    )
+
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        docx_name = zf.namelist()[0]
+        doc_bytes = zf.read(docx_name)
+
+    document = Document(BytesIO(doc_bytes))
+    shape = max(document.inline_shapes, key=lambda s: s.width)
+
+    max_width_emu = Mm(width_mm).emu
+    max_height_emu = Mm(height_mm).emu
+    tolerance = 1
+
+    assert shape.width <= max_width_emu + tolerance
+    assert shape.height <= max_height_emu + tolerance
+
+    expected_ratio = 600 / 300
+    actual_ratio = shape.width / shape.height
+    assert actual_ratio == pytest.approx(expected_ratio, rel=1e-3)
