@@ -1,8 +1,5 @@
 import pandas as pd
 import streamlit as st
-import gspread
-
-from config import SHEET_ID, SHEET_NAME
 
 from sheets import (
     CACHE_FILE,
@@ -10,48 +7,17 @@ from sheets import (
     get_sheet_data,
     get_unique_sites_and_dates,
     load_offline_cache,
-    get_service_account_credentials,
 )
 
 from ui import render_workwatch_header, set_background
 from report import generate_reports
-from report_structuring import (
-    REPORT_HEADERS,
-    clean_and_structure_report,
-    resolve_report_header_name,
-)
-
-
-def get_gsheet(sheet_id: str, sheet_name: str):
-    """Return a gspread worksheet for the given sheet ID and worksheet name."""
-    credentials = get_service_account_credentials()
-    client = gspread.authorize(credentials)
-    return client.open_by_key(sheet_id).worksheet(sheet_name)
-
-
-def append_to_sheet(row_data: dict, sheet):
-    """Append a dictionary of row data to the worksheet using header order."""
-
-    headers = sheet.row_values(1)
-    if not headers:
-        raise ValueError("Worksheet must have a header row to append data.")
-
-    ordered_row = []
-    for header in headers:
-        canonical = resolve_report_header_name(header) or header
-        if canonical in row_data:
-            ordered_row.append(row_data.get(canonical, ""))
-        else:
-            ordered_row.append(row_data.get(header, ""))
-    sheet.append_row(ordered_row)
+from report_structuring import REPORT_HEADERS
 
 
 def run_app():
     """Render the Streamlit interface."""
     set_background("bg.jpg")
     render_workwatch_header()
-
-    st.session_state.setdefault("structured_report_data", None)
 
     # Controls that were mistakenly embedded in HTML in original file:
     st.sidebar.subheader("Gallery Controls")
@@ -131,26 +97,6 @@ def run_app():
 
     site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
-    st.subheader("Process Contractor Report")
-    raw_report_text = st.text_area(
-        "Paste the contractor's raw report:",
-        key="structured_raw_report_text",
-        height=300,
-    )
-    if st.button("Clean & Structure Report"):
-        if not raw_report_text.strip():
-            st.warning("Please paste the contractor report before processing.")
-        else:
-            try:
-                structured_payload = clean_and_structure_report(raw_report_text)
-            except ValueError as exc:
-                st.warning(str(exc))
-            except Exception as exc:  # pragma: no cover - user notification
-                st.error(f"Report processing failed: {exc}")
-            else:
-                st.session_state["structured_report_data"] = structured_payload
-                st.success("Report processed successfully.")
-
     # Preview
     st.subheader("Preview Reports to be Generated")
     df_preview = pd.DataFrame(
@@ -182,46 +128,6 @@ def run_app():
             add_border=add_border,
         )
         st.download_button("Download ZIP", zip_bytes, "reports.zip")
-
-        structured_rows = [
-            dict(
-                zip(
-                    REPORT_HEADERS,
-                    (row + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)],
-                )
-            )
-            for row in filtered_rows
-        ]
-        if structured_rows:
-            st.session_state["structured_report_data"] = (
-                structured_rows[0]
-                if len(structured_rows) == 1
-                else structured_rows
-            )
-        else:
-            st.session_state["structured_report_data"] = None
-
-    structured_report = st.session_state.get("structured_report_data")
-    if structured_report is not None:
-        st.subheader("Generated Report JSON")
-        st.json(structured_report)
-        if st.button("Send to Google Sheet"):
-            try:
-                worksheet = get_gsheet(SHEET_ID, SHEET_NAME)
-                rows_to_append = (
-                    structured_report
-                    if isinstance(structured_report, list)
-                    else [structured_report]
-                )
-                for row_payload in rows_to_append:
-                    if not isinstance(row_payload, dict):
-                        raise ValueError("Report rows must be dictionaries.")
-                    append_to_sheet(row_payload, worksheet)
-                st.success("✅ Report saved to Google Sheet!")
-            except Exception as e:  # pragma: no cover - user notification
-                st.error(f"Failed to save report: {e}")
-
-
 if __name__ == "__main__":
     run_app()
 
