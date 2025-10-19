@@ -310,10 +310,6 @@ def generate_reports(
 
                 tpl.render(ctx)
 
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
-                    tpl.save(tmp_docx.name)
-                    zipf.write(tmp_docx.name, arcname=out_name)
-                    os.remove(tmp_docx.name)
     finally:
         try:
             os.remove(sanitized_template)
