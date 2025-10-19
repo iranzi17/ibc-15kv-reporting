@@ -176,6 +176,7 @@ def generate_reports(
 
     try:
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
+            used_names: Dict[str, int] = {}
             for row in filtered_rows:
                 (
                     date,
@@ -230,84 +231,95 @@ def generate_reports(
                                 cell, spacing_mm, col_idx, table_columns
                             )
 
-                        if col_idx < len(row_cells):
-                            img_path = row_cells[col_idx]
-                            run = cell.paragraphs[0].add_run()
-                            width_emu = int(content_width_mm * EMU_PER_MM)
-                            if content_height_mm:
-                                height_emu = int(max(1.0, content_height_mm) * EMU_PER_MM)
-                                picture = run.add_picture(
-                                    img_path, width=width_emu, height=height_emu
-                                )
-                            else:
-                                picture = run.add_picture(img_path, width=width_emu)
+                            if col_idx < len(row_cells):
+                                img_path = row_cells[col_idx]
+                                run = cell.paragraphs[0].add_run()
+                                width_emu = int(content_width_mm * EMU_PER_MM)
+                                if content_height_mm:
+                                    height_emu = int(max(1.0, content_height_mm) * EMU_PER_MM)
+                                    run.add_picture(
+                                        img_path, width=width_emu, height=height_emu
+                                    )
+                                else:
+                                    run.add_picture(img_path, width=width_emu)
 
-                            if add_border:
-                                from docx.oxml import parse_xml
+                                if add_border:
+                                    from docx.oxml import parse_xml
 
-                                borders_xml = """
-                                <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
-                                    <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                </w:tcBorders>
-                                """
-                                tcPr = cell._element.get_or_add_tcPr()
-                                tcPr.append(parse_xml(borders_xml))
+                                    borders_xml = """
+                                    <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
+                                        <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                        <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                        <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                        <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
+                                    </w:tcBorders>
+                                    """
+                                    tcPr = cell._element.get_or_add_tcPr()
+                                    tcPr.append(parse_xml(borders_xml))
+                                try:
+                                    os.remove(img_path)
+                                except Exception:
+                                    pass
+
                             try:
-                                os.remove(img_path)
-                            except Exception:
+                                table.columns[col_idx].width = Mm(
+                                    content_width_mm + left_margin + right_margin
+                                )
+                            except IndexError:
                                 pass
-                        try:
-                            table.columns[col_idx].width = Mm(
-                                content_width_mm + left_margin + right_margin
-                            )
-                        except IndexError:
-                            pass
-                    row_cells = []
-                    if (idx + 1) % (images_per_row * 2) == 0 and idx != len(image_bytes) - 1:
-                        images_subdoc.add_page_break()
+                        row_cells = []
+                        if (idx + 1) % (images_per_row * 2) == 0 and idx != len(image_bytes) - 1:
+                            images_subdoc.add_page_break()
 
-            sign_info = SIGNATORIES.get(discipline, {})
-            cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
-            cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
-            cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-            cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+                sign_info = SIGNATORIES.get(discipline, {})
+                cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+                cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+                cons_sig_img = (
+                    InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+                )
+                cont_sig_img = (
+                    InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+                )
 
-            ctx = {
-                "Date": date,
-                "Site_Name": site_name,
-                "District": district,
-                "Work": work,
-                "Human_Resources": human_resources,
-                "Supply": supply,
-                "Work_Executed": work_executed,
-                "Comment_on_work": comment_on_work,
-                "Another_Work_Executed": another_work_executed,
-                "Comment_on_HSE": comment_on_hse,
-                "Consultant_Recommandation": consultant_recommandation,
-                "Non_Compliant_work": non_compliant_work,
-                "Reaction_and_WayForword": reaction_way_forward,
-                "challenges": challenges,
-                "Consultant_Name": sign_info.get("Consultant_Name", ""),
-                "Consultant_Title": sign_info.get("Consultant_Title", ""),
-                "Contractor_Name": sign_info.get("Contractor_Name", ""),
-                "Contractor_Title": sign_info.get("Contractor_Title", ""),
-                "Consultant_Signature": cons_sig_img,
-                "Contractor_Signature": cont_sig_img,
-                "Images": images_subdoc,
-            }
+                ctx = {
+                    "Date": date,
+                    "Site_Name": site_name,
+                    "District": district,
+                    "Work": work,
+                    "Human_Resources": human_resources,
+                    "Supply": supply,
+                    "Work_Executed": work_executed,
+                    "Comment_on_work": comment_on_work,
+                    "Another_Work_Executed": another_work_executed,
+                    "Comment_on_HSE": comment_on_hse,
+                    "Consultant_Recommandation": consultant_recommandation,
+                    "Non_Compliant_work": non_compliant_work,
+                    "Reaction_and_WayForword": reaction_way_forward,
+                    "challenges": challenges,
+                    "Consultant_Name": sign_info.get("Consultant_Name", ""),
+                    "Consultant_Title": sign_info.get("Consultant_Title", ""),
+                    "Contractor_Name": sign_info.get("Contractor_Name", ""),
+                    "Contractor_Title": sign_info.get("Contractor_Title", ""),
+                    "Consultant_Signature": cons_sig_img,
+                    "Contractor_Signature": cont_sig_img,
+                    "Images": images_subdoc,
+                }
 
-            # Backwards compatibility for templates that still use the unsanitised placeholder.
-            ctx["Reaction&WayForword"] = reaction_way_forward
+                # Backwards compatibility for templates that still use the unsanitised placeholder.
+                ctx["Reaction&WayForword"] = reaction_way_forward
 
-            tpl.render(ctx)
-            out_name = safe_filename(f"{site_name}_{format_date_title(date)}.docx")
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
-                tpl.save(tmp_docx.name)
-                zipf.write(tmp_docx.name, arcname=out_name)
-                os.remove(tmp_docx.name)
+                tpl.render(ctx)
+                base_name = safe_filename(f"{site_name}_{format_date_title(date)}") or "report"
+                count = used_names.get(base_name, 0)
+                used_names[base_name] = count + 1
+                if count:
+                    out_name = f"{base_name}_{count + 1}.docx"
+                else:
+                    out_name = f"{base_name}.docx"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
+                    tpl.save(tmp_docx.name)
+                    zipf.write(tmp_docx.name, arcname=out_name)
+                    os.remove(tmp_docx.name)
     finally:
         try:
             os.remove(sanitized_template)
