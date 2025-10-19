@@ -89,6 +89,7 @@ class _StreamlitStub:
         return []
 
     def download_button(self, *_, **__):
+        self.download_called = True
         return None
 
     def json(self, data, *_, **__):
@@ -186,7 +187,7 @@ def test_run_app_excludes_header_rows(monkeypatch):
     assert st_stub.json_value == structured_report
 
 
-def test_run_app_uses_helper_when_button_clicked(monkeypatch):
+def test_run_app_generates_reports_when_button_clicked(monkeypatch):
     sheet_rows = [
         HEADERS,
         [
@@ -209,27 +210,23 @@ def test_run_app_uses_helper_when_button_clicked(monkeypatch):
 
     monkeypatch.setattr(app, "get_sheet_data", lambda: sheet_rows)
     monkeypatch.setattr(app, "load_offline_cache", lambda: None)
-    monkeypatch.setattr(app, "generate_reports", lambda *_, **__: b"zip-bytes")
+    generated = {}
+
+    def fake_generate(filtered_rows, *_args, **_kwargs):
+        generated["rows"] = filtered_rows
+        return b"zip-bytes"
+
+    monkeypatch.setattr(app, "generate_reports", fake_generate)
     monkeypatch.setattr(app, "set_background", lambda *_: None)
     monkeypatch.setattr(app, "render_workwatch_header", lambda *_: None)
 
-    captured_text = []
-    canned_payload = {header: f"value-{header}" for header in HEADERS}
-
-    def fake_helper(raw_text):
-        captured_text.append(raw_text)
-        return canned_payload
-
-    monkeypatch.setattr(app, "clean_and_structure_report", fake_helper)
-
     st_stub = _StreamlitStub()
-    st_stub.text_area_value = "Sample contractor report"
-    st_stub.button_states["Generate Reports"] = False
-    st_stub.button_states["Clean & Structure Report"] = True
+    st_stub.download_called = False
+    st_stub.button_states["Generate Reports"] = True
     monkeypatch.setattr(app, "st", st_stub)
 
     app.run_app()
 
-    assert captured_text == ["Sample contractor report"]
-    assert st_stub.session_state["structured_report_data"] == canned_payload
-    assert st_stub.json_value == canned_payload
+    assert generated["rows"] == [sheet_rows[1]]
+    assert st_stub.download_called is True
+    assert not st_stub.text_area_calls
