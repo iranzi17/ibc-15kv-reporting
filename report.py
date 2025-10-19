@@ -167,6 +167,14 @@ def generate_reports(
     zip_buffer = BytesIO()
     sanitized_template = _create_sanitized_template_copy(template_path)
     try:
+        images_per_row = max(1, int(img_per_row))
+    except (TypeError, ValueError):
+        images_per_row = 1
+    table_columns = max(2, images_per_row)
+    content_width_mm = max(1.0, float(img_width_mm))
+    content_height_mm = float(img_height_mm) if img_height_mm else None
+
+    try:
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
             for row in filtered_rows:
                 (
@@ -185,49 +193,54 @@ def generate_reports(
                     reaction_way_forward,
                     challenges,
                 ) = (row + [""] * 14)[:14]
-            site_name = site_name.strip()
-            date = date.strip()
+                site_name = site_name.strip()
+                date = date.strip()
 
-            tpl = DocxTemplate(sanitized_template)
+                tpl = DocxTemplate(sanitized_template)
 
-            required = {
-                "Consultant_Name",
-                "Consultant_Title",
-                "Consultant_Signature",
-                "Contractor_Name",
-                "Contractor_Title",
-                "Contractor_Signature",
-            }
-            placeholders = tpl.get_undeclared_template_variables({})
-            missing = required - placeholders
-            if missing:
-                st.warning(
-                    "Template is missing placeholders: " + ", ".join(sorted(missing))
-                )
+                required = {
+                    "Consultant_Name",
+                    "Consultant_Title",
+                    "Consultant_Signature",
+                    "Contractor_Name",
+                    "Contractor_Title",
+                    "Contractor_Signature",
+                }
+                placeholders = tpl.get_undeclared_template_variables({})
+                missing = required - placeholders
+                if missing:
+                    st.warning(
+                        "Template is missing placeholders: " + ", ".join(sorted(missing))
+                    )
 
-            image_bytes = uploaded_image_mapping.get((site_name, date), []) or []
-            images_subdoc = tpl.new_subdoc()
-            row_cells = []
-            for idx, data in enumerate(image_bytes):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
-                    tmp_img.write(data)
-                    tmp_img.flush()
-                    row_cells.append(tmp_img.name)
-                if (idx + 1) % img_per_row == 0 or idx == len(image_bytes) - 1:
-                    columns_in_row = max(1, len(row_cells))
-                    table = images_subdoc.add_table(rows=1, cols=img_per_row)
-                    table.autofit = False
-                    for col_idx in range(img_per_row):
-                        cell = table.rows[0].cells[col_idx]
-                        effective_index = min(col_idx, columns_in_row - 1)
-                        left_margin, right_margin = _apply_cell_spacing(
-                            cell, spacing_mm, effective_index, columns_in_row
-                        )
+                image_bytes = uploaded_image_mapping.get((site_name, date), []) or []
+                images_subdoc = tpl.new_subdoc()
+                row_cells = []
+                for idx, data in enumerate(image_bytes):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
+                        tmp_img.write(data)
+                        tmp_img.flush()
+                        row_cells.append(tmp_img.name)
+                    if (idx + 1) % images_per_row == 0 or idx == len(image_bytes) - 1:
+                        table = images_subdoc.add_table(rows=1, cols=table_columns)
+                        table.autofit = False
+                        for col_idx in range(table_columns):
+                            cell = table.rows[0].cells[col_idx]
+                            left_margin, right_margin = _apply_cell_spacing(
+                                cell, spacing_mm, col_idx, table_columns
+                            )
 
                         if col_idx < len(row_cells):
                             img_path = row_cells[col_idx]
                             run = cell.paragraphs[0].add_run()
-                            picture = run.add_picture(img_path)
+                            width_emu = int(content_width_mm * EMU_PER_MM)
+                            if content_height_mm:
+                                height_emu = int(max(1.0, content_height_mm) * EMU_PER_MM)
+                                picture = run.add_picture(
+                                    img_path, width=width_emu, height=height_emu
+                                )
+                            else:
+                                picture = run.add_picture(img_path, width=width_emu)
 
                             if add_border:
                                 from docx.oxml import parse_xml
@@ -253,7 +266,7 @@ def generate_reports(
                         except IndexError:
                             pass
                     row_cells = []
-                    if (idx + 1) % (img_per_row * 2) == 0 and idx != len(image_bytes) - 1:
+                    if (idx + 1) % (images_per_row * 2) == 0 and idx != len(image_bytes) - 1:
                         images_subdoc.add_page_break()
 
             sign_info = SIGNATORIES.get(discipline, {})

@@ -63,6 +63,7 @@ def test_generate_reports_respects_width_and_spacing():
         doc_bytes = zf.read(docx_name)
 
     document = Document(BytesIO(doc_bytes))
+    document_xml = document.part.element.xml
 
     root = ET.fromstring(document_xml)
     ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
