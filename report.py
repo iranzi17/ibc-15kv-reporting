@@ -176,6 +176,7 @@ def generate_reports(
 
     try:
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
+            used_names: Dict[str, int] = {}
             for row in filtered_rows:
                 (
                     date,
@@ -308,7 +309,7 @@ def generate_reports(
                 ctx["Reaction&WayForword"] = reaction_way_forward
 
                 tpl.render(ctx)
-                out_name = safe_filename(f"{site_name}_{format_date_title(date)}.docx")
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
                     tpl.save(tmp_docx.name)
                     zipf.write(tmp_docx.name, arcname=out_name)
