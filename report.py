@@ -309,13 +309,7 @@ def generate_reports(
                 ctx["Reaction&WayForword"] = reaction_way_forward
 
                 tpl.render(ctx)
-                base_name = safe_filename(f"{site_name}_{format_date_title(date)}") or "report"
-                count = used_names.get(base_name, 0)
-                used_names[base_name] = count + 1
-                if count:
-                    out_name = f"{base_name}_{count + 1}.docx"
-                else:
-                    out_name = f"{base_name}.docx"
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_docx:
                     tpl.save(tmp_docx.name)
                     zipf.write(tmp_docx.name, arcname=out_name)
