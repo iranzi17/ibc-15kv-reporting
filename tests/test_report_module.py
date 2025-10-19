@@ -42,6 +42,25 @@ def test_generate_reports_returns_zip():
     assert names[0].startswith('Site A')
 
 
+def test_generate_reports_unique_docx_names_for_duplicates():
+    rows = [
+        _empty_row("Site A", "2025-08-06"),
+        _empty_row("Site A", "2025-08-06"),
+        _empty_row("", ""),
+        _empty_row("", ""),
+    ]
+    data = report.generate_reports(rows, {}, "Civil", 70, 60, 2, 2, False)
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        names = sorted(zf.namelist())
+
+    assert names == [
+        "Site A_08.06.2025.docx",
+        "Site A_08.06.2025_2.docx",
+        "report.docx",
+        "report_2.docx",
+    ]
+
+
 def test_generate_reports_respects_width_and_spacing():
     rows = [_empty_row("Site A", "2025-08-06")]
     uploaded = {("Site A", "2025-08-06"): [SQUARE_PNG]}
