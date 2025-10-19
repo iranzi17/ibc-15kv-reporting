@@ -11,7 +11,20 @@ from sheets import (
 
 from ui import render_workwatch_header, set_background
 from report import generate_reports
-from report_structuring import REPORT_HEADERS
+from report_structuring import REPORT_HEADERS, clean_and_structure_report
+
+
+def _rows_to_structured_data(rows):
+    """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
+
+    structured = []
+    for row in rows:
+        entry = {header: "" for header in REPORT_HEADERS}
+        for index, header in enumerate(REPORT_HEADERS):
+            if index < len(row):
+                entry[header] = row[index]
+        structured.append(entry)
+    return structured
 
 
 def _rows_to_structured_data(rows):
@@ -119,8 +132,7 @@ def run_app():
     st.dataframe(df_preview)
 
     structured_from_rows = _rows_to_structured_data(filtered_rows)
-    st.session_state["structured_report_data"] = structured_from_rows
-    st.json(st.session_state["structured_report_data"])
+
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
@@ -132,6 +144,20 @@ def run_app():
         if files:
             key = (site.strip(), date.strip())
             st.session_state.setdefault("images", {})[key] = [f.read() for f in files]
+
+    st.subheader("Contractor Report Parser")
+    raw_report_text = st.text_area("Paste contractor report text")
+
+    if st.button("Clean & Structure Report"):
+        try:
+            structured_report = clean_and_structure_report(raw_report_text)
+        except (TypeError, ValueError) as exc:
+            st.warning(f"Unable to structure report: {exc}")
+        else:
+            st.session_state["structured_report_data"] = structured_report
+            st.session_state["_structured_origin"] = "manual"
+
+    st.json(st.session_state.get("structured_report_data", structured_from_rows))
 
     if st.button("Generate Reports"):
         if not filtered_rows:
