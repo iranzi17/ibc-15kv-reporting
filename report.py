@@ -310,6 +310,27 @@ def generate_reports(
 
                 tpl.render(ctx)
 
+                base_filename = safe_filename(
+                    "_".join(filter(None, [site_name or "report", format_date_title(date)]))
+                )
+                if not base_filename:
+                    base_filename = "report"
+                count = used_names.get(base_filename, 0) + 1
+                used_names[base_filename] = count
+                filename = base_filename if count == 1 else f"{base_filename}_{count}"
+                if not filename.lower().endswith(".docx"):
+                    filename = f"{filename}.docx"
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_doc:
+                    tpl.save(tmp_doc.name)
+                    tmp_path = tmp_doc.name
+                with open(tmp_path, "rb") as fh:
+                    zipf.writestr(filename, fh.read())
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
     finally:
         try:
             os.remove(sanitized_template)
