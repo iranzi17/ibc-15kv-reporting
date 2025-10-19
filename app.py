@@ -27,6 +27,19 @@ def _rows_to_structured_data(rows):
     return structured
 
 
+def _rows_to_structured_data(rows):
+    """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
+
+    structured = []
+    for row in rows:
+        entry = {header: "" for header in REPORT_HEADERS}
+        for index, header in enumerate(REPORT_HEADERS):
+            if index < len(row):
+                entry[header] = row[index]
+        structured.append(entry)
+    return structured
+
+
 def run_app():
     """Render the Streamlit interface."""
     set_background("bg.jpg")
@@ -119,9 +132,7 @@ def run_app():
     st.dataframe(df_preview)
 
     structured_from_rows = _rows_to_structured_data(filtered_rows)
-    if st.session_state.get("_structured_origin") != "manual":
-        st.session_state["structured_report_data"] = structured_from_rows
-        st.session_state["_structured_origin"] = "rows"
+
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
@@ -149,6 +160,9 @@ def run_app():
     st.json(st.session_state.get("structured_report_data", structured_from_rows))
 
     if st.button("Generate Reports"):
+        if not filtered_rows:
+            st.warning("No data available for the selected sites and dates.")
+            return
         zip_bytes = generate_reports(
             filtered_rows,
             st.session_state.get("images", {}),
