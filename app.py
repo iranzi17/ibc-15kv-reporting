@@ -19,6 +19,17 @@ from ui_hero import render_hero
 
 st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
+def _safe_columns(*args, **kwargs):
+    """Call ``st.columns`` falling back to positional-only call for stubs."""
+
+    columns_fn = getattr(st, "columns", None)
+    if not callable(columns_fn):
+        return (nullcontext(), nullcontext())
+
+    try:
+        return columns_fn(*args, **kwargs)
+    except TypeError:
+        return columns_fn(*args)
 
 def _safe_markdown(markdown: str, **kwargs) -> None:
     """Call ``st.markdown`` when available (tests provide a stub without it)."""
