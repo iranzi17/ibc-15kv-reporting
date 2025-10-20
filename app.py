@@ -18,17 +18,7 @@ from ui_hero import render_hero
 st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
-def _rows_to_structured_data(rows):
-    """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
-
-    structured = []
-    for row in rows:
-        entry = {header: "" for header in REPORT_HEADERS}
-        for index, header in enumerate(REPORT_HEADERS):
-            if index < len(row):
-                entry[header] = row[index]
-        structured.append(entry)
-    return structured
+st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
 def _rows_to_structured_data(rows):
@@ -87,43 +77,8 @@ def run_app():
             except Exception as e:  # pragma: no cover - user notification
                 st.error(f"Sync failed: {e}")
 
-    try:
-        rows = get_sheet_data()
-        data_rows = rows[1:] if rows else []
-        sites, _ = get_unique_sites_and_dates(data_rows)
-
-        col_left, col_right = st.columns([1, 2])
-
-        with col_left:
-            discipline = st.radio(
-                "Discipline", ["Civil", "Electrical"], key="discipline_radio"
-            )
-
-        with col_right:
-            st.header("Select Sites")
-            site_choices = ["All Sites"] + sites
-            selected_sites = st.multiselect(
-                "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
-            )
-            if "All Sites" in selected_sites or not selected_sites:
-                selected_sites = sites
-
-            st.header("Select Dates")
-            site_dates = sorted(
-                {
-                    row[0].strip()
-                    for row in data_rows
-                    if row[1].strip() in selected_sites
-                }
-            )
-            date_choices = ["All Dates"] + site_dates
-            selected_dates = st.multiselect(
-                "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
-            )
-            if "All Dates" in selected_dates or not selected_dates:
-                selected_dates = site_dates
-    except Exception as e:  # pragma: no cover - user notification
-        st.error(f"Failed to load site data: {e}")
+    if data_error is not None:  # pragma: no cover - user notification
+        st.error(f"Failed to load site data: {data_error}")
         return
 
     # Filtered rows
