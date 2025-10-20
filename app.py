@@ -21,17 +21,16 @@ st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
-def _rows_to_structured_data(rows):
-    """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
+def _load_sheet_context():
+    """Return tuple of (data_rows, sites, error) while isolating failures."""
 
-    structured = []
-    for row in rows:
-        entry = {header: "" for header in REPORT_HEADERS}
-        for index, header in enumerate(REPORT_HEADERS):
-            if index < len(row):
-                entry[header] = row[index]
-        structured.append(entry)
-    return structured
+    try:
+        rows = get_sheet_data()
+        data_rows = rows[1:] if rows else []
+        sites, _ = get_unique_sites_and_dates(data_rows)
+        return data_rows, list(sites), None
+    except Exception as exc:  # pragma: no cover - user notification
+        return [], [], exc
 
 
 def run_app():
