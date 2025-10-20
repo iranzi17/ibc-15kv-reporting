@@ -18,6 +18,9 @@ from ui_hero import render_hero
 st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
+st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
+
+
 def _rows_to_structured_data(rows):
     """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
 
@@ -33,96 +36,13 @@ def _rows_to_structured_data(rows):
 
 def run_app():
     """Render the Streamlit interface."""
-    data_rows = []
-    sites = []
-    data_error = None
-
-    try:
-        rows = get_sheet_data()
-        data_rows = rows[1:] if rows else []
-        sites, _ = get_unique_sites_and_dates(data_rows)
-        sites = list(sites)
-    except Exception as exc:  # pragma: no cover - user notification
-        data_error = exc
-
-    def _render_filters():
-        discipline_column, sites_column, dates_column = st.columns((0.85, 1.1, 1.1), gap="large")
-
-        with discipline_column:
-            st.markdown(
-                "<p class=\"hero-field-label\">Discipline</p>",
-                unsafe_allow_html=True,
-            )
-            discipline_choice = st.radio(
-                "Discipline",
-                ["Civil", "Electrical"],
-                key="discipline_radio",
-                label_visibility="collapsed",
-            )
-
-        site_options = ["All Sites"] + sites if sites else []
-        selected_sites_effective: list[str] = []
-
-        with sites_column:
-            st.markdown(
-                "<p class=\"hero-field-label\">Select Sites</p>",
-                unsafe_allow_html=True,
-            )
-            selected_sites_raw = st.multiselect(
-                "Choose sites",
-                site_options,
-                default=["All Sites"] if sites else [],
-                key="sites_ms",
-                label_visibility="collapsed",
-            )
-            if "All Sites" in selected_sites_raw or not selected_sites_raw:
-                selected_sites_effective = sites.copy()
-            else:
-                selected_sites_effective = selected_sites_raw
-
-        with dates_column:
-            st.markdown(
-                "<p class=\"hero-field-label\">Select Dates</p>",
-                unsafe_allow_html=True,
-            )
-            available_dates = sorted(
-                {
-                    row[0].strip()
-                    for row in data_rows
-                    if row[1].strip() in (selected_sites_effective or [])
-                }
-            )
-            date_options = ["All Dates"] + available_dates if available_dates else ["All Dates"]
-            selected_dates_raw = st.multiselect(
-                "Choose dates",
-                date_options,
-                default=["All Dates"] if available_dates else [],
-                key="dates_ms",
-                label_visibility="collapsed",
-            )
-            if "All Dates" in selected_dates_raw or not selected_dates_raw:
-                selected_dates_effective = available_dates
-            else:
-                selected_dates_effective = selected_dates_raw
-
-        return discipline_choice, selected_sites_effective, selected_dates_effective
-
-    discipline = "Civil"
-    selected_sites = sites.copy()
-    selected_dates = sorted({row[0].strip() for row in data_rows})
-
-    filters_values = render_hero(
+    render_hero(
         title="Smart Field Reporting for Electrical & Civil Works",
         subtitle="A modern reporting system for engineers, supervisors and consultants.",
         cta_primary="Generate Reports",
         cta_secondary="Upload Site Data",
         image_path="bg.jpg",
-        filters_renderer=_render_filters,
     )
-
-    if filters_values is not None:
-        discipline, selected_sites, selected_dates = filters_values
-
     st.markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 

@@ -3,11 +3,9 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Tuple
+from typing import Optional
 
 import streamlit as st
-
-FiltersResult = Optional[Tuple[str, Iterable[str], Iterable[str]]]
 
 
 def _resolve_image(image_path: str) -> Optional[str]:
@@ -19,6 +17,7 @@ def _resolve_image(image_path: str) -> Optional[str]:
     for path in candidate_paths:
         if path.exists() and path.is_file():
             encoded = base64.b64encode(path.read_bytes()).decode()
+            # Heuristic for mime type; jpg is the provided asset.
             suffix = path.suffix.lower()
             if suffix in {".jpg", ".jpeg"}:
                 mime = "image/jpeg"
@@ -38,280 +37,147 @@ def render_hero(
     cta_primary: str = "Generate Reports",
     cta_secondary: str = "Upload Site Data",
     image_path: str = "bg.jpg",
-    filters_renderer: Optional[Callable[[], FiltersResult]] = None,
-) -> FiltersResult:
-    """Render the blue FormAssembly-style hero at the top of the page.
-
-    Parameters
-    ----------
-    title, subtitle, cta_primary, cta_secondary, image_path
-        Text and imagery shown in the left/right hero columns.
-    filters_renderer
-        Optional callback executed inside a tinted panel beneath the hero copy
-        where Streamlit widgets (discipline/sites/dates) can live. The callback
-        should return a tuple of values which will be surfaced back to the
-        caller so the rest of the app can use the selections.
-    """
-
-    img_src = _resolve_image(image_path) or image_path
+) -> None:
+    """Render the blue FormAssembly-style hero at the top of the page."""
 
     st.markdown(
         """
         <style>
         /* ---- Global refinements ---- */
-        .block-container { padding-top: 1.1rem; padding-bottom: 2.4rem; }
+        .block-container { padding-top: 1.25rem; padding-bottom: 2rem; }
 
-        /* ---- Hero container ---- */
-        .hero-block {
-            position: relative;
+        /* ---- Hero wrapper ---- */
+        .hero-wrap {
             width: 100%;
-            margin: 0 auto 1.6rem auto;
-            background: linear-gradient(135deg, #0a66c2 0%, #1b86f9 100%);
-            border-radius: 24px;
-            padding: clamp(28px, 4vw, 52px) clamp(22px, 6vw, 48px);
-            box-shadow: 0 16px 42px rgba(11, 81, 156, 0.28);
+            margin: 0 auto 28px auto;
+            border-radius: 16px;
             overflow: hidden;
+            background: linear-gradient(135deg, #0a66c2 0%, #1b86f9 100%);
+            padding: 48px 28px;
+            box-shadow: 0 12px 30px rgba(20, 86, 160, 0.25);
         }
 
-        .hero-block .stColumn {
-            align-self: center;
+        /* ---- Hero grid ---- */
+        .hero-grid {
+            display: grid;
+            grid-template-columns: 1.1fr 1fr;
+            gap: 28px;
+            align-items: center;
         }
 
-        .hero-copy h1 {
+        /* ---- Left text ---- */
+        .hero-title {
             color: #ffffff;
             font-weight: 800;
             letter-spacing: -0.3px;
-            line-height: 1.1;
-            font-size: clamp(32px, 3.1vw, 46px);
-            margin-bottom: 0.65rem;
+            line-height: 1.15;
+            font-size: clamp(28px, 3.2vw, 44px);
+            margin: 0 0 10px 0;
         }
-
-        .hero-copy p {
+        .hero-subtitle {
             color: rgba(255,255,255,0.92);
-            font-size: clamp(15px, 1.3vw, 18px);
+            font-size: clamp(14px, 1.3vw, 18px);
             line-height: 1.6;
-            margin-bottom: 1.4rem;
+            margin: 0 0 22px 0;
         }
 
+        /* ---- CTA row ---- */
         .hero-cta {
             display: flex;
             flex-wrap: wrap;
             gap: 12px;
         }
-        .hero-cta button {
-            border-radius: 12px;
-            font-weight: 700;
-            padding: 12px 20px;
-            cursor: pointer;
-            border: none;
-            transition: transform .08s ease, box-shadow .18s ease, background .18s ease;
+        .btn-primary {
+            background: #ffffff; color: #0a66c2;
+            border: 0; border-radius: 10px; padding: 12px 18px;
+            font-weight: 700; cursor: pointer;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.08);
+            transition: transform .06s ease, box-shadow .2s ease;
         }
-        .hero-cta .btn-primary {
-            background: #ffffff;
-            color: #0a66c2;
-            box-shadow: 0 8px 22px rgba(0,0,0,0.18);
-        }
-        .hero-cta .btn-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 14px 28px rgba(0,0,0,0.2);
-        }
-        .hero-cta .btn-outline {
-            background: rgba(10, 102, 194, 0.15);
-            color: #ffffff;
-            border: 2px solid rgba(255,255,255,0.86);
-            box-shadow: 0 8px 22px rgba(0,0,0,0.12);
-        }
-        .hero-cta .btn-outline:hover {
-            background: rgba(255,255,255,0.18);
-            transform: translateY(-1px);
-        }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 20px rgba(0,0,0,0.12); }
 
-        .hero-media-wrapper {
-            width: 100%;
-            background: rgba(255,255,255,0.96);
-            border-radius: 22px;
-            padding: 12px;
-            box-shadow: 0 20px 44px rgba(0,0,0,0.26);
+        .btn-outline {
+            background: transparent; color: #ffffff;
+            border: 2px solid rgba(255,255,255,0.9);
+            border-radius: 10px; padding: 10px 16px;
+            font-weight: 700; cursor: pointer;
+            transition: background .15s ease, transform .06s ease;
         }
-        .hero-media-wrapper img {
+        .btn-outline:hover { background: rgba(255,255,255,0.12); transform: translateY(-1px); }
+
+        /* ---- Right image tablet ---- */
+        .hero-media {
+            background: #ffffff;
+            border-radius: 18px;
+            padding: 10px;
+            box-shadow: 0 18px 40px rgba(0,0,0,0.18);
+        }
+        .hero-media img {
+            display: block;
             width: 100%;
             height: auto;
-            border-radius: 16px;
-            display: block;
+            border-radius: 12px;
         }
 
-        .hero-filters {
-            margin-top: clamp(18px, 3vw, 28px);
-            background: rgba(255,255,255,0.14);
-            border-radius: 18px;
-            padding: clamp(18px, 3vw, 28px);
-            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.24);
-        }
-
-        .hero-filters .hero-field-label {
-            color: rgba(255,255,255,0.92);
-            font-size: 0.92rem;
-            font-weight: 600;
-            margin-bottom: 0.35rem;
-        }
-
-        .hero-filters [data-testid="stRadio"] > div[role="radiogroup"] > label {
-            background: rgba(255,255,255,0.12);
-            color: #ffffff;
-            border-radius: 10px;
-            padding: 10px 14px;
-            margin-bottom: 6px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .hero-filters [data-testid="stRadio"] > div[role="radiogroup"] > label:hover {
-            background: rgba(255,255,255,0.22);
-        }
-
-        .hero-filters [data-testid="stRadio"] svg {
-            fill: rgba(255,255,255,0.8);
-        }
-
-        .hero-filters div[data-baseweb="select"] {
-            background: rgba(255,255,255,0.92);
-            border-radius: 12px !important;
-            box-shadow: 0 6px 18px rgba(15, 70, 135, 0.2);
-        }
-        .hero-filters div[data-baseweb="select"] input {
-            color: #0a356c !important;
-        }
-        .hero-filters div[data-baseweb="select"] div[aria-selected="true"] {
-            background: #0a66c2;
-            color: #ffffff;
-        }
-
-        .hero-filters .stMultiSelect {
-            color: #0a356c;
-        }
-
-        .hero-filters .stMultiSelect span[data-baseweb="tag"] {
-            background: #f44336;
-            color: #ffffff;
-            border-radius: 8px;
-        }
-
-        .hero-filters .stMultiSelect span[data-baseweb="tag"] svg {
-            fill: #ffffff;
-        }
-
-        .hero-filters .stVerticalBlock {
-            gap: 0.4rem;
-        }
-
-        .hero-filters .stColumn {
-            padding-bottom: 0 !important;
-        }
-
-        .hero-filters .stSelectbox > label,
-        .hero-filters .stMultiSelect > label,
-        .hero-filters [data-testid="stRadio"] > label {
-            display: none;
-        }
-
-        @media (max-width: 1100px) {
-            .hero-cta { justify-content: flex-start; }
-        }
-
+        /* ---- Responsive ---- */
         @media (max-width: 900px) {
-            .hero-block {
-                padding: clamp(24px, 6vw, 42px) clamp(18px, 6vw, 32px);
-            }
-            .hero-filters .stColumns {
-                flex-direction: column;
-            }
+            .hero-grid { grid-template-columns: 1fr; }
         }
-
-        body, .stApp { background: #ffffff !important; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    filters_values: FiltersResult = None
-    hero_container = st.container()
-    with hero_container:
-        st.markdown('<div class="hero-marker"></div>', unsafe_allow_html=True)
-        left, right = st.columns((1.08, 1), gap="large")
-        with left:
-            st.markdown(
-                f"""
-                <div class="hero-copy">
-                  <h1>{title}</h1>
-                  <p>{subtitle}</p>
-                  <div class="hero-cta">
-                    <button class="btn-primary" data-action="generate">{cta_primary}</button>
-                    <button class="btn-outline" data-action="upload">{cta_secondary}</button>
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with right:
-            st.markdown(
-                f"""
-                <div class="hero-media-wrapper">
-                  <img src="{img_src}" alt="Preview" />
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    img_src = _resolve_image(image_path) or image_path
 
-        if filters_renderer is not None:
-            filters_container = st.container()
-            with filters_container:
-                st.markdown('<div class="hero-filters-marker"></div>', unsafe_allow_html=True)
-                filters_values = filters_renderer()
+    st.markdown(
+        f"""
+        <div class="hero-wrap">
+          <div class="hero-grid">
+            <div>
+              <h1 class="hero-title">{title}</h1>
+              <p class="hero-subtitle">{subtitle}</p>
+              <div class="hero-cta">
+                <button class="btn-primary" data-action="generate">{cta_primary}</button>
+                <button class="btn-outline" data-action="upload">{cta_secondary}</button>
+              </div>
+            </div>
+            <div class="hero-media">
+              <img src="{img_src}" alt="Preview">
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown(
         """
         <script>
-        (function attachHeroEnhancements(){
-            const doc = (window.parent && window.parent !== window)
-                ? window.parent.document
-                : window.document;
-            const ensureBound = () => {
-                const actionMap = { generate: 'reports-section', upload: 'upload-section' };
-                doc.querySelectorAll('.hero-cta [data-action]').forEach((btn) => {
+        (function attachHeroCTAs(){
+            const actionMap = {
+                generate: 'reports-section',
+                upload: 'upload-section'
+            };
+            const bind = () => {
+                document.querySelectorAll('.hero-cta [data-action]').forEach((btn) => {
                     if (btn.dataset.heroBound === 'true') return;
                     btn.dataset.heroBound = 'true';
                     btn.addEventListener('click', () => {
                         const targetId = actionMap[btn.dataset.action];
                         if (!targetId) return;
-                        const el = doc.getElementById(targetId);
+                        const el = document.getElementById(targetId);
                         if (el && typeof el.scrollIntoView === 'function') {
                             el.scrollIntoView({ behavior: 'smooth', block: 'start' });
                         }
                     });
                 });
-
-                doc.querySelectorAll('.hero-marker').forEach((marker) => {
-                    const block = marker.closest('[data-testid="stVerticalBlock"]');
-                    if (block && !block.classList.contains('hero-block')) {
-                        block.classList.add('hero-block');
-                    }
-                    marker.remove();
-                });
-
-                doc.querySelectorAll('.hero-filters-marker').forEach((marker) => {
-                    const block = marker.closest('[data-testid="stVerticalBlock"]');
-                    if (block && !block.classList.contains('hero-filters')) {
-                        block.classList.add('hero-filters');
-                    }
-                    marker.remove();
-                });
             };
-
-            if (doc.readyState === 'complete') {
-                ensureBound();
+            if (document.readyState === 'complete') {
+                bind();
             } else {
-                doc.addEventListener('DOMContentLoaded', ensureBound, { once: true });
-                window.addEventListener('load', ensureBound, { once: true });
+                window.addEventListener('load', bind);
+                document.addEventListener('DOMContentLoaded', bind);
             }
         })();
         </script>
@@ -319,4 +185,12 @@ def render_hero(
         unsafe_allow_html=True,
     )
 
-    return filters_values
+    # Ensure the rest of the page retains a neutral white background.
+    st.markdown(
+        """
+        <style>
+          body, .stApp { background: #ffffff !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
