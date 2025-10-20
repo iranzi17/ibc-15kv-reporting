@@ -95,6 +95,30 @@ def run_app():
     _safe_markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 
+    _safe_markdown(
+        """
+        <style>
+        /* Improve legibility and tap targets for the primary filters */
+        div[data-testid="stRadio"] label {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        div[data-testid="stMultiSelect"] label {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        div[data-testid="stMultiSelect"] input {
+            min-height: 44px;
+            font-size: 0.95rem;
+        }
+        div[data-baseweb="select"] > div {
+            min-height: 46px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # Controls that were mistakenly embedded in HTML in original file:
     st.sidebar.subheader("Gallery Controls")
     img_width_mm = st.sidebar.slider(

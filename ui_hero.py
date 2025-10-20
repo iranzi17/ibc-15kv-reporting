@@ -44,21 +44,25 @@ def render_hero(
         .block-container { padding-top: 1.25rem; padding-bottom: 2rem; }
 
         /* ---- Hero wrapper ---- */
-        .hero-wrap {
+        .hero-outer {
             width: 100%;
-            margin: 0 auto 28px auto;
+            margin-bottom: 28px;
+        }
+        .hero-wrap {
+            width: min(1120px, 100%);
+            margin: 0 auto;
             border-radius: 16px;
             overflow: hidden;
             background: linear-gradient(135deg, #0a66c2 0%, #1b86f9 100%);
-            padding: 48px 28px;
+            padding: clamp(32px, 5vw, 48px) clamp(20px, 4vw, 36px);
             box-shadow: 0 12px 30px rgba(20, 86, 160, 0.25);
         }
 
         /* ---- Hero grid ---- */
         .hero-grid {
             display: grid;
-            grid-template-columns: 1.1fr 1fr;
-            gap: 28px;
+            grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+            gap: clamp(20px, 4vw, 32px);
             align-items: center;
         }
 
