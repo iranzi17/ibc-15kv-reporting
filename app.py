@@ -9,9 +9,13 @@ from sheets import (
     load_offline_cache,
 )
 
-from ui import render_workwatch_header, set_background
 from report import generate_reports
 from report_structuring import REPORT_HEADERS, clean_and_structure_report
+from ui import render_workwatch_header
+from ui_hero import render_hero
+
+
+st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
 def _rows_to_structured_data(rows):
@@ -27,22 +31,31 @@ def _rows_to_structured_data(rows):
     return structured
 
 
-def _rows_to_structured_data(rows):
-    """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
+def _load_sheet_context():
+    """Return tuple of (data_rows, sites, error) while isolating failures."""
 
-    structured = []
-    for row in rows:
-        entry = {header: "" for header in REPORT_HEADERS}
-        for index, header in enumerate(REPORT_HEADERS):
-            if index < len(row):
-                entry[header] = row[index]
-        structured.append(entry)
-    return structured
+    try:
+        rows = get_sheet_data()
+        data_rows = rows[1:] if rows else []
+        sites, _ = get_unique_sites_and_dates(data_rows)
+        return data_rows, list(sites), None
+    except Exception as exc:  # pragma: no cover - user notification
+        return [], [], exc
 
 
 def run_app():
     """Render the Streamlit interface."""
-    set_background("bg.jpg")
+    data_rows, sites, data_error = _load_sheet_context()
+
+    render_hero(
+        title="Smart Field Reporting for Electrical & Civil Works",
+        subtitle="A modern reporting system for engineers, supervisors and consultants.",
+        cta_primary="Generate Reports",
+        cta_secondary="Upload Site Data",
+        image_path="bg.jpg",
+    )
+
+    st.markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 
     # Controls that were mistakenly embedded in HTML in original file:
@@ -61,6 +74,66 @@ def run_app():
         "Gap between images (mm)", min_value=0, max_value=20, value=5, step=1
     )
 
+    if data_error is not None:  # pragma: no cover - user notification
+        st.error(f"Failed to load site data: {data_error}")
+        return
+
+    filters_container = st.container()
+    with filters_container:
+        discipline_column, selectors_column = st.columns((0.9, 1.8), gap="large")
+
+        with discipline_column:
+            discipline = st.radio(
+                "Discipline",
+                ["Civil", "Electrical"],
+                key="discipline_radio",
+            )
+
+        with selectors_column:
+            sites_column, dates_column = st.columns(2, gap="large")
+
+            site_options = ["All Sites"] + sites if sites else ["All Sites"]
+            default_sites = ["All Sites"] if site_options else []
+
+            with sites_column:
+                st.subheader("Select Sites")
+                selected_sites_raw = st.multiselect(
+                    "Choose sites:",
+                    site_options,
+                    default=default_sites,
+                    key="sites_ms",
+                )
+
+            if "All Sites" in selected_sites_raw or not selected_sites_raw:
+                selected_sites = sites.copy()
+            else:
+                selected_sites = selected_sites_raw
+
+            available_dates = sorted(
+                {
+                    row[0].strip()
+                    for row in data_rows
+                    if not selected_sites or row[1].strip() in selected_sites
+                }
+            )
+
+            date_options = ["All Dates"] + available_dates if available_dates else ["All Dates"]
+            default_dates = ["All Dates"] if available_dates else []
+
+            with dates_column:
+                st.subheader("Select Dates")
+                selected_dates_raw = st.multiselect(
+                    "Choose dates:",
+                    date_options,
+                    default=default_dates,
+                    key="dates_ms",
+                )
+
+            if "All Dates" in selected_dates_raw or not selected_dates_raw:
+                selected_dates = available_dates
+            else:
+                selected_dates = selected_dates_raw
+
     # Get sheet data
     cache = load_offline_cache()
     if cache and cache.get("rows"):
@@ -75,45 +148,6 @@ def run_app():
                 cache = None
             except Exception as e:  # pragma: no cover - user notification
                 st.error(f"Sync failed: {e}")
-
-    try:
-        rows = get_sheet_data()
-        data_rows = rows[1:] if rows else []
-        sites, _ = get_unique_sites_and_dates(data_rows)
-
-        col_left, col_right = st.columns([1, 2])
-
-        with col_left:
-            discipline = st.radio(
-                "Discipline", ["Civil", "Electrical"], key="discipline_radio"
-            )
-
-        with col_right:
-            st.header("Select Sites")
-            site_choices = ["All Sites"] + sites
-            selected_sites = st.multiselect(
-                "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
-            )
-            if "All Sites" in selected_sites or not selected_sites:
-                selected_sites = sites
-
-            st.header("Select Dates")
-            site_dates = sorted(
-                {
-                    row[0].strip()
-                    for row in data_rows
-                    if row[1].strip() in selected_sites
-                }
-            )
-            date_choices = ["All Dates"] + site_dates
-            selected_dates = st.multiselect(
-                "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
-            )
-            if "All Dates" in selected_dates or not selected_dates:
-                selected_dates = site_dates
-    except Exception as e:  # pragma: no cover - user notification
-        st.error(f"Failed to load site data: {e}")
-        return
 
     # Filtered rows
     filtered_rows = [
@@ -133,6 +167,12 @@ def run_app():
 
     structured_from_rows = _rows_to_structured_data(filtered_rows)
 
+    if st.session_state.get("_structured_origin") != "manual":
+        st.session_state["structured_report_data"] = structured_from_rows
+        st.session_state["_structured_origin"] = "rows"
+
+
+    st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
