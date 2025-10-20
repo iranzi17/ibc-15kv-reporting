@@ -9,9 +9,13 @@ from sheets import (
     load_offline_cache,
 )
 
-from ui import render_workwatch_header, set_background
 from report import generate_reports
 from report_structuring import REPORT_HEADERS, clean_and_structure_report
+from ui import render_workwatch_header
+from ui_hero import render_hero
+
+
+st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
 def _rows_to_structured_data(rows):
@@ -42,7 +46,14 @@ def _rows_to_structured_data(rows):
 
 def run_app():
     """Render the Streamlit interface."""
-    set_background("bg.jpg")
+    render_hero(
+        title="Smart Field Reporting for Electrical & Civil Works",
+        subtitle="A modern reporting system for engineers, supervisors and consultants.",
+        cta_primary="Generate Reports",
+        cta_secondary="Upload Site Data",
+        image_path="bg.jpg",
+    )
+    st.markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 
     # Controls that were mistakenly embedded in HTML in original file:
@@ -133,6 +144,8 @@ def run_app():
 
     structured_from_rows = _rows_to_structured_data(filtered_rows)
 
+
+    st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
