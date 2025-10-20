@@ -61,6 +61,66 @@ def run_app():
         "Gap between images (mm)", min_value=0, max_value=20, value=5, step=1
     )
 
+    if data_error is not None:  # pragma: no cover - user notification
+        st.error(f"Failed to load site data: {data_error}")
+        return
+
+    filters_container = st.container()
+    with filters_container:
+        discipline_column, selectors_column = st.columns((0.9, 1.8), gap="large")
+
+        with discipline_column:
+            discipline = st.radio(
+                "Discipline",
+                ["Civil", "Electrical"],
+                key="discipline_radio",
+            )
+
+        with selectors_column:
+            sites_column, dates_column = st.columns(2, gap="large")
+
+            site_options = ["All Sites"] + sites if sites else ["All Sites"]
+            default_sites = ["All Sites"] if site_options else []
+
+            with sites_column:
+                st.subheader("Select Sites")
+                selected_sites_raw = st.multiselect(
+                    "Choose sites:",
+                    site_options,
+                    default=default_sites,
+                    key="sites_ms",
+                )
+
+            if "All Sites" in selected_sites_raw or not selected_sites_raw:
+                selected_sites = sites.copy()
+            else:
+                selected_sites = selected_sites_raw
+
+            available_dates = sorted(
+                {
+                    row[0].strip()
+                    for row in data_rows
+                    if not selected_sites or row[1].strip() in selected_sites
+                }
+            )
+
+            date_options = ["All Dates"] + available_dates if available_dates else ["All Dates"]
+            default_dates = ["All Dates"] if available_dates else []
+
+            with dates_column:
+                st.subheader("Select Dates")
+                selected_dates_raw = st.multiselect(
+                    "Choose dates:",
+                    date_options,
+                    default=default_dates,
+                    key="dates_ms",
+                )
+
+            if "All Dates" in selected_dates_raw or not selected_dates_raw:
+                selected_dates = available_dates
+            else:
+                selected_dates = selected_dates_raw
+
     # Get sheet data
     cache = load_offline_cache()
     if cache and cache.get("rows"):
@@ -98,6 +158,12 @@ def run_app():
 
     structured_from_rows = _rows_to_structured_data(filtered_rows)
 
+    if st.session_state.get("_structured_origin") != "manual":
+        st.session_state["structured_report_data"] = structured_from_rows
+        st.session_state["_structured_origin"] = "rows"
+
+
+    st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
     st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
