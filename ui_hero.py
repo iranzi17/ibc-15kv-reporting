@@ -1,34 +1,30 @@
-"""Hero section utilities for the WorkWatch Streamlit app."""
-from __future__ import annotations
-
 import base64
 from pathlib import Path
-from typing import Optional
 
 import streamlit as st
 
 
-def _resolve_image(image_path: str) -> Optional[str]:
-    """Return a base64 data URI for the provided image path if it exists."""
-    candidate_paths = [Path(image_path)]
-    # Support relative lookups from this file's directory as well.
-    candidate_paths.append(Path(__file__).parent / image_path)
+def _resolve_image(image_path: str) -> str:
+    """Return a usable image reference for the hero preview."""
 
-    for path in candidate_paths:
-        if path.exists() and path.is_file():
-            encoded = base64.b64encode(path.read_bytes()).decode()
-            # Heuristic for mime type; jpg is the provided asset.
-            suffix = path.suffix.lower()
-            if suffix in {".jpg", ".jpeg"}:
-                mime = "image/jpeg"
-            elif suffix == ".png":
-                mime = "image/png"
-            elif suffix == ".webp":
-                mime = "image/webp"
-            else:
-                mime = "image/jpeg"
-            return f"data:{mime};base64,{encoded}"
-    return None
+    candidate = Path(image_path)
+    if not candidate.exists():
+        candidate = Path(__file__).parent / image_path
+
+    if candidate.exists() and candidate.is_file():
+        encoded = base64.b64encode(candidate.read_bytes()).decode()
+        suffix = candidate.suffix.lower()
+        if suffix in {".jpg", ".jpeg"}:
+            mime = "image/jpeg"
+        elif suffix == ".png":
+            mime = "image/png"
+        elif suffix == ".webp":
+            mime = "image/webp"
+        else:
+            mime = "image/jpeg"
+        return f"data:{mime};base64,{encoded}"
+
+    return image_path
 
 
 def render_hero(
@@ -38,12 +34,13 @@ def render_hero(
     cta_secondary: str = "Upload Site Data",
     image_path: str = "bg.jpg",
 ) -> None:
-    """Render the blue FormAssembly-style hero at the top of the page."""
+    """Render the FormAssembly-style hero section at the top of the page."""
 
     st.markdown(
         """
         <style>
         /* ---- Global refinements ---- */
+        /* Reduce default Streamlit padding a bit */
         .block-container { padding-top: 1.25rem; padding-bottom: 2rem; }
 
         /* ---- Hero wrapper ---- */
@@ -128,69 +125,39 @@ def render_hero(
         unsafe_allow_html=True,
     )
 
-    img_src = _resolve_image(image_path) or image_path
+    img_src = _resolve_image(image_path)
 
-    st.markdown(
-        f"""
-        <div class="hero-wrap">
-          <div class="hero-grid">
-            <div>
-              <h1 class="hero-title">{title}</h1>
-              <p class="hero-subtitle">{subtitle}</p>
-              <div class="hero-cta">
-                <button class="btn-primary" data-action="generate">{cta_primary}</button>
-                <button class="btn-outline" data-action="upload">{cta_secondary}</button>
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        st.markdown(
+            f"""
+            <div class="hero-wrap">
+              <div class="hero-grid">
+                <div>
+                  <h1 class="hero-title">{title}</h1>
+                  <p class="hero-subtitle">{subtitle}</p>
+                  <div class="hero-cta">
+                    <button class="btn-primary" data-action="generate">{cta_primary}</button>
+                    <button class="btn-outline" data-action="upload">{cta_secondary}</button>
+                  </div>
+                </div>
+                <div class="hero-media">
+                  <img src="{img_src}" alt="Preview">
+                </div>
               </div>
             </div>
-            <div class="hero-media">
-              <img src="{img_src}" alt="Preview">
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
+    # No content in right column; the hero is full-width via custom CSS.
 
     st.markdown(
         """
         <script>
-        (function attachHeroCTAs(){
-            const actionMap = {
-                generate: 'reports-section',
-                upload: 'upload-section'
-            };
-            const bind = () => {
-                document.querySelectorAll('.hero-cta [data-action]').forEach((btn) => {
-                    if (btn.dataset.heroBound === 'true') return;
-                    btn.dataset.heroBound = 'true';
-                    btn.addEventListener('click', () => {
-                        const targetId = actionMap[btn.dataset.action];
-                        if (!targetId) return;
-                        const el = document.getElementById(targetId);
-                        if (el && typeof el.scrollIntoView === 'function') {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        }
-                    });
-                });
-            };
-            if (document.readyState === 'complete') {
-                bind();
-            } else {
-                window.addEventListener('load', bind);
-                document.addEventListener('DOMContentLoaded', bind);
-            }
-        })();
+        // Optional: Codex can bind these to existing widgets/sections.
+        // document.querySelector('[data-action="generate"]')?.addEventListener('click', () => {/* attach */});
+        // document.querySelector('[data-action="upload"]')?.addEventListener('click', () => {/* attach */});
         </script>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Ensure the rest of the page retains a neutral white background.
-    st.markdown(
-        """
-        <style>
-          body, .stApp { background: #ffffff !important; }
-        </style>
         """,
         unsafe_allow_html=True,
     )
