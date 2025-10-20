@@ -13,11 +13,30 @@ from sheets import (
 
 from report import generate_reports
 from report_structuring import REPORT_HEADERS, clean_and_structure_report
-from ui import render_workwatch_header, set_background  # noqa: F401
+from ui import render_workwatch_header, set_background
 from ui_hero import render_hero
 
 
 st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
+
+def _safe_columns(*args, **kwargs):
+    """Call ``st.columns`` falling back to positional-only call for stubs."""
+
+    columns_fn = getattr(st, "columns", None)
+    if not callable(columns_fn):
+        return (nullcontext(), nullcontext())
+
+    try:
+        return columns_fn(*args, **kwargs)
+    except TypeError:
+        return columns_fn(*args)
+
+def _safe_markdown(markdown: str, **kwargs) -> None:
+    """Call ``st.markdown`` when available (tests provide a stub without it)."""
+
+    if hasattr(st, "markdown"):
+        st.markdown(markdown, **kwargs)
+
 
 def _safe_columns(*args, **kwargs):
     """Call ``st.columns`` falling back to positional-only call for stubs."""
@@ -65,6 +84,7 @@ def _rows_to_structured_data(rows):
 
 def run_app():
     """Render the Streamlit interface."""
+    set_background("bg.jpg")
     render_hero(
         title="Smart Field Reporting for Electrical & Civil Works",
         subtitle="A modern reporting system for engineers, supervisors and consultants.",
@@ -72,6 +92,7 @@ def run_app():
         cta_secondary="Upload Site Data",
         image_path="bg.jpg",
     )
+    _safe_markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 
     # Controls that were mistakenly embedded in HTML in original file:
@@ -194,6 +215,10 @@ def run_app():
         st.session_state["structured_report_data"] = structured_from_rows
         st.session_state["_structured_origin"] = "rows"
 
+
+    _safe_markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
+
+    _safe_markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
