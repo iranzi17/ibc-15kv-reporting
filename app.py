@@ -18,17 +18,7 @@ from ui_hero import render_hero
 st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
-def _rows_to_structured_data(rows):
-    """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
-
-    structured = []
-    for row in rows:
-        entry = {header: "" for header in REPORT_HEADERS}
-        for index, header in enumerate(REPORT_HEADERS):
-            if index < len(row):
-                entry[header] = row[index]
-        structured.append(entry)
-    return structured
+st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
 def _load_sheet_context():
@@ -45,8 +35,6 @@ def _load_sheet_context():
 
 def run_app():
     """Render the Streamlit interface."""
-    data_rows, sites, data_error = _load_sheet_context()
-
     render_hero(
         title="Smart Field Reporting for Electrical & Civil Works",
         subtitle="A modern reporting system for engineers, supervisors and consultants.",
@@ -54,7 +42,6 @@ def run_app():
         cta_secondary="Upload Site Data",
         image_path="bg.jpg",
     )
-
     st.markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 
@@ -149,6 +136,10 @@ def run_app():
             except Exception as e:  # pragma: no cover - user notification
                 st.error(f"Sync failed: {e}")
 
+    if data_error is not None:  # pragma: no cover - user notification
+        st.error(f"Failed to load site data: {data_error}")
+        return
+
     # Filtered rows
     filtered_rows = [
         row for row in data_rows
@@ -171,6 +162,8 @@ def run_app():
         st.session_state["structured_report_data"] = structured_from_rows
         st.session_state["_structured_origin"] = "rows"
 
+
+    st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
     st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
