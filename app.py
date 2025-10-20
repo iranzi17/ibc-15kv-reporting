@@ -9,22 +9,13 @@ from sheets import (
     load_offline_cache,
 )
 
-from ui import render_workwatch_header, set_background
 from report import generate_reports
 from report_structuring import REPORT_HEADERS, clean_and_structure_report
+from ui import render_workwatch_header
+from ui_hero import render_hero
 
 
-def _rows_to_structured_data(rows):
-    """Convert raw sheet rows into dictionaries keyed by REPORT_HEADERS."""
-
-    structured = []
-    for row in rows:
-        entry = {header: "" for header in REPORT_HEADERS}
-        for index, header in enumerate(REPORT_HEADERS):
-            if index < len(row):
-                entry[header] = row[index]
-        structured.append(entry)
-    return structured
+st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
 def _rows_to_structured_data(rows):
@@ -42,7 +33,97 @@ def _rows_to_structured_data(rows):
 
 def run_app():
     """Render the Streamlit interface."""
-    set_background("bg.jpg")
+    data_rows = []
+    sites = []
+    data_error = None
+
+    try:
+        rows = get_sheet_data()
+        data_rows = rows[1:] if rows else []
+        sites, _ = get_unique_sites_and_dates(data_rows)
+        sites = list(sites)
+    except Exception as exc:  # pragma: no cover - user notification
+        data_error = exc
+
+    def _render_filters():
+        discipline_column, sites_column, dates_column = st.columns((0.85, 1.1, 1.1), gap="large")
+
+        with discipline_column:
+            st.markdown(
+                "<p class=\"hero-field-label\">Discipline</p>",
+                unsafe_allow_html=True,
+            )
+            discipline_choice = st.radio(
+                "Discipline",
+                ["Civil", "Electrical"],
+                key="discipline_radio",
+                label_visibility="collapsed",
+            )
+
+        site_options = ["All Sites"] + sites if sites else []
+        selected_sites_effective: list[str] = []
+
+        with sites_column:
+            st.markdown(
+                "<p class=\"hero-field-label\">Select Sites</p>",
+                unsafe_allow_html=True,
+            )
+            selected_sites_raw = st.multiselect(
+                "Choose sites",
+                site_options,
+                default=["All Sites"] if sites else [],
+                key="sites_ms",
+                label_visibility="collapsed",
+            )
+            if "All Sites" in selected_sites_raw or not selected_sites_raw:
+                selected_sites_effective = sites.copy()
+            else:
+                selected_sites_effective = selected_sites_raw
+
+        with dates_column:
+            st.markdown(
+                "<p class=\"hero-field-label\">Select Dates</p>",
+                unsafe_allow_html=True,
+            )
+            available_dates = sorted(
+                {
+                    row[0].strip()
+                    for row in data_rows
+                    if row[1].strip() in (selected_sites_effective or [])
+                }
+            )
+            date_options = ["All Dates"] + available_dates if available_dates else ["All Dates"]
+            selected_dates_raw = st.multiselect(
+                "Choose dates",
+                date_options,
+                default=["All Dates"] if available_dates else [],
+                key="dates_ms",
+                label_visibility="collapsed",
+            )
+            if "All Dates" in selected_dates_raw or not selected_dates_raw:
+                selected_dates_effective = available_dates
+            else:
+                selected_dates_effective = selected_dates_raw
+
+        return discipline_choice, selected_sites_effective, selected_dates_effective
+
+    discipline = "Civil"
+    selected_sites = sites.copy()
+    selected_dates = sorted({row[0].strip() for row in data_rows})
+
+    filters_values = render_hero(
+        title="Smart Field Reporting for Electrical & Civil Works",
+        subtitle="A modern reporting system for engineers, supervisors and consultants.",
+        cta_primary="Generate Reports",
+        cta_secondary="Upload Site Data",
+        image_path="bg.jpg",
+        filters_renderer=_render_filters,
+    )
+
+    if filters_values is not None:
+        discipline, selected_sites, selected_dates = filters_values
+
+    st.markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 
     # Controls that were mistakenly embedded in HTML in original file:
@@ -76,43 +157,8 @@ def run_app():
             except Exception as e:  # pragma: no cover - user notification
                 st.error(f"Sync failed: {e}")
 
-    try:
-        rows = get_sheet_data()
-        data_rows = rows[1:] if rows else []
-        sites, _ = get_unique_sites_and_dates(data_rows)
-
-        col_left, col_right = st.columns([1, 2])
-
-        with col_left:
-            discipline = st.radio(
-                "Discipline", ["Civil", "Electrical"], key="discipline_radio"
-            )
-
-        with col_right:
-            st.header("Select Sites")
-            site_choices = ["All Sites"] + sites
-            selected_sites = st.multiselect(
-                "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
-            )
-            if "All Sites" in selected_sites or not selected_sites:
-                selected_sites = sites
-
-            st.header("Select Dates")
-            site_dates = sorted(
-                {
-                    row[0].strip()
-                    for row in data_rows
-                    if row[1].strip() in selected_sites
-                }
-            )
-            date_choices = ["All Dates"] + site_dates
-            selected_dates = st.multiselect(
-                "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
-            )
-            if "All Dates" in selected_dates or not selected_dates:
-                selected_dates = site_dates
-    except Exception as e:  # pragma: no cover - user notification
-        st.error(f"Failed to load site data: {e}")
+    if data_error is not None:  # pragma: no cover - user notification
+        st.error(f"Failed to load site data: {data_error}")
         return
 
     # Filtered rows
@@ -133,6 +179,8 @@ def run_app():
 
     structured_from_rows = _rows_to_structured_data(filtered_rows)
 
+
+    st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
