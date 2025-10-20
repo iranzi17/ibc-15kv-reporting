@@ -131,28 +131,29 @@ def render_hero(
 
     img_src = _resolve_image(image_path)
 
-    st.markdown(
-        f"""
-        <div class="hero-outer">
-          <div class="hero-wrap">
-            <div class="hero-grid">
-              <div>
-                <h1 class="hero-title">{title}</h1>
-                <p class="hero-subtitle">{subtitle}</p>
-                <div class="hero-cta">
-                  <button class="btn-primary" data-action="generate">{cta_primary}</button>
-                  <button class="btn-outline" data-action="upload">{cta_secondary}</button>
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        st.markdown(
+            f"""
+            <div class="hero-wrap">
+              <div class="hero-grid">
+                <div>
+                  <h1 class="hero-title">{title}</h1>
+                  <p class="hero-subtitle">{subtitle}</p>
+                  <div class="hero-cta">
+                    <button class="btn-primary" data-action="generate">{cta_primary}</button>
+                    <button class="btn-outline" data-action="upload">{cta_secondary}</button>
+                  </div>
+                </div>
+                <div class="hero-media">
+                  <img src="{img_src}" alt="Preview">
                 </div>
               </div>
-              <div class="hero-media">
-                <img src="{img_src}" alt="Preview">
-              </div>
             </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
+    # No content in right column; the hero is full-width via custom CSS.
 
     st.markdown(
         """
