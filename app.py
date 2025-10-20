@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import pandas as pd
 import streamlit as st
 
@@ -11,14 +13,40 @@ from sheets import (
 
 from report import generate_reports
 from report_structuring import REPORT_HEADERS, clean_and_structure_report
-from ui import render_workwatch_header
+from ui import render_workwatch_header, set_background
 from ui_hero import render_hero
 
 
 st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
 
 
-st.set_page_config(page_title="WorkWatch — Site Intelligence", layout="wide")
+def _safe_markdown(markdown: str, **kwargs) -> None:
+    """Call ``st.markdown`` when available (tests provide a stub without it)."""
+
+    if hasattr(st, "markdown"):
+        st.markdown(markdown, **kwargs)
+
+
+def _safe_columns(*args, **kwargs):
+    """Call ``st.columns`` falling back to positional-only call for stubs."""
+
+    columns_fn = getattr(st, "columns", None)
+    if not callable(columns_fn):
+        return (nullcontext(), nullcontext())
+
+    try:
+        return columns_fn(*args, **kwargs)
+    except TypeError:
+        return columns_fn(*args)
+
+
+def _safe_checkbox(label: str, *, value=False, key=None):
+    """Return value of ``st.checkbox`` or the provided default when unavailable."""
+
+    checkbox_fn = getattr(st, "checkbox", None)
+    if callable(checkbox_fn):
+        return checkbox_fn(label, value=value, key=key)
+    return value
 
 
 def _load_sheet_context():
@@ -33,8 +61,19 @@ def _load_sheet_context():
         return [], [], exc
 
 
+def _rows_to_structured_data(rows):
+    """Convert row lists into dictionaries keyed by ``REPORT_HEADERS`` names."""
+
+    structured = []
+    for row in rows:
+        entry = {header: value for header, value in zip(REPORT_HEADERS, row)}
+        structured.append(entry)
+    return structured
+
+
 def run_app():
     """Render the Streamlit interface."""
+    set_background("bg.jpg")
     render_hero(
         title="Smart Field Reporting for Electrical & Civil Works",
         subtitle="A modern reporting system for engineers, supervisors and consultants.",
@@ -42,7 +81,7 @@ def run_app():
         cta_secondary="Upload Site Data",
         image_path="bg.jpg",
     )
-    st.markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
+    _safe_markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
 
     # Controls that were mistakenly embedded in HTML in original file:
@@ -61,13 +100,16 @@ def run_app():
         "Gap between images (mm)", min_value=0, max_value=20, value=5, step=1
     )
 
+    data_rows, sites, data_error = _load_sheet_context()
+
     if data_error is not None:  # pragma: no cover - user notification
         st.error(f"Failed to load site data: {data_error}")
         return
 
-    filters_container = st.container()
+    container_fn = getattr(st, "container", None)
+    filters_container = container_fn() if callable(container_fn) else nullcontext()
     with filters_container:
-        discipline_column, selectors_column = st.columns((0.9, 1.8), gap="large")
+        discipline_column, selectors_column = _safe_columns((0.9, 1.8), gap="large")
 
         with discipline_column:
             discipline = st.radio(
@@ -77,7 +119,7 @@ def run_app():
             )
 
         with selectors_column:
-            sites_column, dates_column = st.columns(2, gap="large")
+            sites_column, dates_column = _safe_columns(2, gap="large")
 
             site_options = ["All Sites"] + sites if sites else ["All Sites"]
             default_sites = ["All Sites"] if site_options else []
@@ -163,9 +205,9 @@ def run_app():
         st.session_state["_structured_origin"] = "rows"
 
 
-    st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
+    _safe_markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
-    st.markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
+    _safe_markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
 
     for site, date in site_date_pairs:
         files = st.file_uploader(
@@ -179,16 +221,21 @@ def run_app():
             st.session_state.setdefault("images", {})[key] = [f.read() for f in files]
 
     st.subheader("Contractor Report Parser")
-    raw_report_text = st.text_area("Paste contractor report text")
+    enable_parser = _safe_checkbox(
+        "Enable manual contractor report parsing", value=False, key="enable_parser"
+    )
 
-    if st.button("Clean & Structure Report"):
-        try:
-            structured_report = clean_and_structure_report(raw_report_text)
-        except (TypeError, ValueError) as exc:
-            st.warning(f"Unable to structure report: {exc}")
-        else:
-            st.session_state["structured_report_data"] = structured_report
-            st.session_state["_structured_origin"] = "manual"
+    if enable_parser:
+        raw_report_text = st.text_area("Paste contractor report text")
+
+        if st.button("Clean & Structure Report"):
+            try:
+                structured_report = clean_and_structure_report(raw_report_text)
+            except (TypeError, ValueError) as exc:
+                st.warning(f"Unable to structure report: {exc}")
+            else:
+                st.session_state["structured_report_data"] = structured_report
+                st.session_state["_structured_origin"] = "manual"
 
     st.json(st.session_state.get("structured_report_data", structured_from_rows))
 
