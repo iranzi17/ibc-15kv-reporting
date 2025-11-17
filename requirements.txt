@@ -4,6 +4,7 @@ gspread
 google-auth
 python-docx
 docxtpl
+docxcompose
 pillow
 google-api-python-client
 openpyxl
