@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html
+import os
 import re
 import shutil
 import subprocess
@@ -352,8 +353,40 @@ def _convert_via_win32com(docx_path: Path, pdf_path: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def _find_powershell_executable() -> str:
+    """Locate a usable PowerShell executable on Windows hosts."""
+    candidates: list[str] = []
+
+    for cmd in ("powershell", "powershell.exe", "pwsh", "pwsh.exe"):
+        located = shutil.which(cmd)
+        if located:
+            candidates.append(located)
+
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidates.extend(
+        [
+            rf"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe",
+            rf"{system_root}\SysWOW64\WindowsPowerShell\v1.0\powershell.exe",
+            rf"{system_root}\System32\WindowsPowerShell\v1.0\pwsh.exe",
+        ]
+    )
+
+    for candidate in candidates:
+        try:
+            if candidate and Path(candidate).exists():
+                return str(Path(candidate))
+        except Exception:
+            continue
+
+    return ""
+
+
 def _convert_via_word_powershell(docx_path: Path, pdf_path: Path) -> tuple[bool, str]:
     """Try converting DOCX to PDF with Word COM in PowerShell."""
+    powershell_exe = _find_powershell_executable()
+    if not powershell_exe:
+        return False, "PowerShell executable not found (tried PATH + standard Windows locations)."
+
     ps_script = textwrap.dedent(
         """
         param(
@@ -383,7 +416,7 @@ def _convert_via_word_powershell(docx_path: Path, pdf_path: Path) -> tuple[bool,
     try:
         result = subprocess.run(
             [
-                "powershell",
+                powershell_exe,
                 "-NoLogo",
                 "-NoProfile",
                 "-NonInteractive",
