@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import html
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -311,54 +312,187 @@ def _build_single_report_docx(
         return b""
 
 
-def _convert_docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
-    """Convert DOCX bytes to PDF bytes using Microsoft Word COM automation."""
+def _convert_via_win32com(docx_path: Path, pdf_path: Path) -> tuple[bool, str]:
+    """Try converting DOCX to PDF with pywin32 Word COM."""
+    try:
+        import pythoncom
+        import win32com.client  # type: ignore
+    except Exception:
+        return False, "pywin32 is not available in this environment."
+
+    word = None
+    doc = None
+    try:
+        pythoncom.CoInitialize()
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        doc = word.Documents.Open(str(docx_path), False, True)
+        doc.SaveAs(str(pdf_path), FileFormat=17)
+    except Exception as exc:
+        return False, f"pywin32 Word conversion failed: {exc}"
+    finally:
+        try:
+            if doc is not None:
+                doc.Close(False)
+        except Exception:
+            pass
+        try:
+            if word is not None:
+                word.Quit()
+        except Exception:
+            pass
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+    if not pdf_path.exists():
+        return False, "pywin32 completed but no PDF was created."
+    return True, ""
+
+
+def _convert_via_word_powershell(docx_path: Path, pdf_path: Path) -> tuple[bool, str]:
+    """Try converting DOCX to PDF with Word COM in PowerShell."""
+    ps_script = textwrap.dedent(
+        """
+        param(
+          [Parameter(Mandatory = $true)][string]$InputPath,
+          [Parameter(Mandatory = $true)][string]$OutputPath
+        )
+
+        $ErrorActionPreference = 'Stop'
+        $word = $null
+        $doc = $null
+        try {
+            $word = New-Object -ComObject Word.Application
+            $word.Visible = $false
+            $word.DisplayAlerts = 0
+            $doc = $word.Documents.Open($InputPath, $false, $true)
+            $doc.SaveAs([string]$OutputPath, 17)
+        } finally {
+            if ($doc -ne $null) { $doc.Close($false) }
+            if ($word -ne $null) { $word.Quit() }
+        }
+        """
+    ).strip()
+
+    script_path = docx_path.parent / "word_to_pdf.ps1"
+    script_path.write_text(ps_script, encoding="utf-8")
+
+    try:
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+                "-InputPath",
+                str(docx_path),
+                "-OutputPath",
+                str(pdf_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except Exception as exc:
+        return False, f"Word/PowerShell launch failed: {exc}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return False, detail or "Word COM conversion failed."
+    if not pdf_path.exists():
+        return False, "Word conversion returned success but no PDF was created."
+    return True, ""
+
+
+def _convert_via_docx2pdf(docx_path: Path, pdf_path: Path) -> tuple[bool, str]:
+    """Try converting DOCX to PDF via docx2pdf (if installed)."""
+    try:
+        from docx2pdf import convert as docx2pdf_convert
+    except Exception:
+        return False, "docx2pdf is not available in this environment."
+
+    try:
+        docx2pdf_convert(str(docx_path), str(pdf_path))
+    except Exception as exc:
+        return False, f"docx2pdf failed: {exc}"
+
+    if not pdf_path.exists():
+        return False, "docx2pdf completed but no PDF was created."
+    return True, ""
+
+
+def _convert_via_libreoffice(docx_path: Path, pdf_path: Path) -> tuple[bool, str]:
+    """Try converting DOCX to PDF via LibreOffice headless mode."""
+    office_bin = shutil.which("soffice") or shutil.which("libreoffice")
+    if not office_bin:
+        return False, "LibreOffice is not installed."
+
+    try:
+        result = subprocess.run(
+            [
+                office_bin,
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(docx_path.parent),
+                str(docx_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except Exception as exc:
+        return False, f"LibreOffice launch failed: {exc}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return False, detail or "LibreOffice conversion failed."
+
+    generated_pdf = docx_path.with_suffix(".pdf")
+    if generated_pdf.exists() and generated_pdf != pdf_path:
+        generated_pdf.replace(pdf_path)
+    if not pdf_path.exists():
+        return False, "LibreOffice completed but no PDF was created."
+    return True, ""
+
+
+def _convert_docx_to_pdf_bytes(docx_bytes: bytes) -> tuple[bytes, str]:
+    """Convert DOCX bytes to PDF bytes and return (pdf_bytes, error_detail)."""
     if not docx_bytes:
-        return b""
+        return b"", "No report document generated for preview."
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         docx_path = (Path(tmp_dir) / "preview.docx").resolve()
         pdf_path = (Path(tmp_dir) / "preview.pdf").resolve()
         docx_path.write_bytes(docx_bytes)
 
-        docx_ps = str(docx_path).replace("'", "''")
-        pdf_ps = str(pdf_path).replace("'", "''")
+        attempts: list[str] = []
+        converters = (
+            _convert_via_win32com,
+            _convert_via_word_powershell,
+            _convert_via_docx2pdf,
+            _convert_via_libreoffice,
+        )
+        for converter in converters:
+            ok, detail = converter(docx_path, pdf_path)
+            if ok and pdf_path.exists():
+                return pdf_path.read_bytes(), ""
+            if detail:
+                attempts.append(detail)
 
-        ps_script = f"""
-$ErrorActionPreference = 'Stop'
-$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-$word.DisplayAlerts = 0
-try {{
-    $doc = $word.Documents.Open('{docx_ps}', $false, $true)
-    $wdFormatPDF = 17
-    $doc.SaveAs([ref]'{pdf_ps}', [ref]$wdFormatPDF)
-    $doc.Close()
-}} finally {{
-    $word.Quit()
-}}
-"""
-
-        try:
-            subprocess.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    ps_script,
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except Exception:
-            return b""
-
-        if pdf_path.exists():
-            return pdf_path.read_bytes()
-        return b""
+        if not attempts:
+            attempts.append("No PDF converter backend succeeded.")
+        return b"", " | ".join(attempts)
 
 
 def _pdf_preview_iframe_html(pdf_bytes: bytes) -> str:
@@ -608,7 +742,7 @@ def run_app():
 
         if preview_docx:
             with st.spinner("Rendering exact preview from template..."):
-                preview_pdf = _convert_docx_to_pdf_bytes(preview_docx)
+                preview_pdf, preview_pdf_error = _convert_docx_to_pdf_bytes(preview_docx)
 
             if preview_pdf:
                 _safe_markdown(
@@ -626,6 +760,8 @@ def run_app():
                 st.warning(
                     "Exact PDF preview is unavailable on this machine; showing best template-based preview instead."
                 )
+                if preview_pdf_error:
+                    st.caption(f"Preview conversion detail: {preview_pdf_error}")
                 _safe_markdown(
                     _render_template_preview_html(preview_docx),
                     unsafe_allow_html=True,
