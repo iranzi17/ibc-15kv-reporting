@@ -3,10 +3,13 @@ from __future__ import annotations
 import base64
 import html
 import re
+import subprocess
+import tempfile
 import textwrap
 import zipfile
 from contextlib import nullcontext
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -308,6 +311,74 @@ def _build_single_report_docx(
         return b""
 
 
+def _convert_docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
+    """Convert DOCX bytes to PDF bytes using Microsoft Word COM automation."""
+    if not docx_bytes:
+        return b""
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        docx_path = (Path(tmp_dir) / "preview.docx").resolve()
+        pdf_path = (Path(tmp_dir) / "preview.pdf").resolve()
+        docx_path.write_bytes(docx_bytes)
+
+        docx_ps = str(docx_path).replace("'", "''")
+        pdf_ps = str(pdf_path).replace("'", "''")
+
+        ps_script = f"""
+$ErrorActionPreference = 'Stop'
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$word.DisplayAlerts = 0
+try {{
+    $doc = $word.Documents.Open('{docx_ps}', $false, $true)
+    $wdFormatPDF = 17
+    $doc.SaveAs([ref]'{pdf_ps}', [ref]$wdFormatPDF)
+    $doc.Close()
+}} finally {{
+    $word.Quit()
+}}
+"""
+
+        try:
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    ps_script,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except Exception:
+            return b""
+
+        if pdf_path.exists():
+            return pdf_path.read_bytes()
+        return b""
+
+
+def _pdf_preview_iframe_html(pdf_bytes: bytes) -> str:
+    """Embed PDF bytes in an iframe for near-perfect report preview."""
+    if not pdf_bytes:
+        return ""
+
+    encoded = base64.b64encode(pdf_bytes).decode("utf-8")
+    return textwrap.dedent(
+        f"""
+        <div style="border:1px solid #d0d5dd; border-radius:10px; background:#f5f7fa; padding:12px;">
+          <iframe
+            src="data:application/pdf;base64,{encoded}"
+            style="width:100%; height:1100px; border:1px solid #c3cad4; border-radius:8px; background:#fff;"
+          ></iframe>
+        </div>
+        """
+    ).strip()
+
+
 def run_app():
     """Render the Streamlit interface."""
     set_background("bg.jpg")
@@ -536,10 +607,29 @@ def run_app():
         )
 
         if preview_docx:
-            _safe_markdown(
-                _render_template_preview_html(preview_docx),
-                unsafe_allow_html=True,
-            )
+            with st.spinner("Rendering exact preview from template..."):
+                preview_pdf = _convert_docx_to_pdf_bytes(preview_docx)
+
+            if preview_pdf:
+                _safe_markdown(
+                    _pdf_preview_iframe_html(preview_pdf),
+                    unsafe_allow_html=True,
+                )
+                st.download_button(
+                    "Download Preview PDF",
+                    preview_pdf,
+                    file_name="preview.pdf",
+                    mime="application/pdf",
+                    key=f"preview_pdf_{preview_idx}",
+                )
+            else:
+                st.warning(
+                    "Exact PDF preview is unavailable on this machine; showing best template-based preview instead."
+                )
+                _safe_markdown(
+                    _render_template_preview_html(preview_docx),
+                    unsafe_allow_html=True,
+                )
         else:
             st.warning("Unable to render template preview for the selected row.")
     elif review_rows:
@@ -585,3 +675,4 @@ def run_app():
 
 if __name__ == "__main__":
     run_app()
+
