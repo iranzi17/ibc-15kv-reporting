@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 import zipfile
 from io import BytesIO
@@ -38,6 +39,46 @@ SIGNATORIES = {
 PLACEHOLDER_REPLACEMENTS = {
     "Reaction&amp;WayForword": "Reaction_and_WayForword",
 }
+
+CABIN_ACTIVITY_PATTERN = re.compile(r"\bcabin\b", re.IGNORECASE)
+CABIN_CONTRACTOR_OVERRIDE = {
+    "Contractor_Name": "Rutarindwa Olivier",
+    "Contractor_Title": "Civil Engineer",
+    # Resolver accepts stem and extension variants.
+    "Contractor_Signature": "rutalindwa_olivier",
+}
+
+
+def _normalized_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def row_mentions_cabin(*fields: object) -> bool:
+    """Return True when any activity field includes the word 'cabin'."""
+    return any(CABIN_ACTIVITY_PATTERN.search(_normalized_text(field)) for field in fields)
+
+
+def signatories_for_row(
+    discipline: str,
+    site_name: str,
+    work: str,
+    work_executed: str,
+    another_work_executed: str,
+    comment_on_work: str,
+) -> dict[str, str]:
+    """Get signatories, overriding contractor details for cabin activities."""
+    sign_info = dict(SIGNATORIES.get(discipline, {}))
+
+    if row_mentions_cabin(
+        site_name,
+        work,
+        work_executed,
+        another_work_executed,
+        comment_on_work,
+    ):
+        sign_info.update(CABIN_CONTRACTOR_OVERRIDE)
+
+    return sign_info
 
 
 def safe_filename(s: str, max_len: int = 150) -> str:
@@ -271,7 +312,14 @@ def generate_reports(
                         if (idx + 1) % (images_per_row * 2) == 0 and idx != len(image_bytes) - 1:
                             images_subdoc.add_page_break()
 
-                sign_info = SIGNATORIES.get(discipline, {})
+                sign_info = signatories_for_row(
+                    discipline,
+                    site_name,
+                    work,
+                    work_executed,
+                    another_work_executed,
+                    comment_on_work,
+                )
                 cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
                 cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
                 cons_sig_img = (

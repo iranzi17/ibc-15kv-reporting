@@ -1,811 +1,615 @@
-import os
-import re
-import json
-import tempfile
-import zipfile
+from __future__ import annotations
+
 import base64
+import html
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Optional
-from io import BytesIO
+from typing import Any
 
 import pandas as pd
 import streamlit as st
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from docxtpl import DocxTemplate, InlineImage
-from docx.shared import Mm
-from docx import Document
-from openpyxl import load_workbook
 
-# ---- Background image (full page, readable) ----
-def set_background(image_path: str, overlay_opacity: float = 0.55):
-    """
-    Minimal background setup. Remove overlays and excessive styling.
-    """
-    pass  # No background or overlay for a clean, professional look
-
-# Store and retrieve the current user's role (default to Viewer)
-
-
-# ---- Styled header: WorkWatch - Site Intelligence - IRANZI ----
-
-
-def render_workwatch_header(
-    author: str = "IRANZI",
-    brand: str = "WorkWatch",
-    subtitle: str = "Site Intelligence",
-    logo_path: Optional[str] = None,
-    tagline: str = "",
-):
-    """Render a compact header with optional subtitle text."""
-    st.header("Site Weekly Report Generator")
-    if tagline:
-        st.caption(tagline)
-
-render_workwatch_header(
-    author="IRANZI",
-    brand="WorkWatch",
-    subtitle="Site Intelligence",
-    logo_path="ibc_logo.png",  # or None to hide
-    tagline="Field reports & weekly summaries",
+from sheets import (
+    CACHE_FILE,
+    append_rows_to_sheet,
+    get_sheet_data,
+    get_unique_sites_and_dates,
+    load_offline_cache,
 )
-# -----------------------------
-# Paths & small helpers
-# -----------------------------
+from report import generate_reports, resolve_asset, signatories_for_row
+from report_structuring import REPORT_HEADERS, clean_and_structure_report
+from ui import render_workwatch_header, set_background
+from ui_hero import render_hero
+
 BASE_DIR = Path(__file__).parent.resolve()
 
-# Column index (0-based) for the "Discipline" field in sheet rows.
-# Sheet structure: Date, Site_Name, District, Work, Human_Resources, Supply,
-# Work_Executed, Comment_on_work, Another_Work_Executed, Comment_on_HSE,
-# Consultant_Recommandation, Discipline
-DISCIPLINE_COL = 11
+st.set_page_config(page_title="WorkWatch - Site Intelligence", layout="wide")
 
-def resolve_asset(name: Optional[str]) -> Optional[str]:
-    """
-    Find an asset (e.g., signature image) whether it's in ./ or ./signatures/,
-    with or without extension. Tries .png/.jpg/.jpeg/.webp.
-    Returns an absolute path or None.
-    """
-    if not name:
+
+def _safe_columns(*args, **kwargs):
+    """Call st.columns falling back to positional-only call for stubs."""
+    columns_fn = getattr(st, "columns", None)
+    if not callable(columns_fn):
+        return (nullcontext(), nullcontext())
+
+    try:
+        return columns_fn(*args, **kwargs)
+    except TypeError:
+        return columns_fn(*args)
+
+
+def _safe_markdown(markdown: str, **kwargs) -> None:
+    """Call st.markdown when available (tests provide a stub without it)."""
+    markdown_fn = getattr(st, "markdown", None)
+    if callable(markdown_fn):
+        markdown_fn(markdown, **kwargs)
+
+
+def _safe_checkbox(label: str, *, value=False, key=None):
+    """Return st.checkbox value or default when unavailable."""
+    checkbox_fn = getattr(st, "checkbox", None)
+    if callable(checkbox_fn):
+        return checkbox_fn(label, value=value, key=key)
+    return value
+
+
+def _safe_caption(text: str) -> None:
+    """Call st.caption when available."""
+    caption_fn = getattr(st, "caption", None)
+    if callable(caption_fn):
+        caption_fn(text)
+
+
+def _safe_data_editor(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+    """Return data editor result, or input frame when editor is unavailable."""
+    editor_fn = getattr(st, "data_editor", None)
+    if not callable(editor_fn):
+        return df
+
+    try:
+        edited = editor_fn(df, **kwargs)
+    except TypeError:
+        edited = editor_fn(df)
+
+    if isinstance(edited, pd.DataFrame):
+        return edited
+    return df
+
+
+def _safe_selectbox(label: str, options: list[Any], index: int = 0, **kwargs):
+    """Return st.selectbox value, with a deterministic fallback for test stubs."""
+    selectbox_fn = getattr(st, "selectbox", None)
+    if callable(selectbox_fn):
+        try:
+            return selectbox_fn(label, options=options, index=index, **kwargs)
+        except TypeError:
+            return selectbox_fn(label, options, index)
+
+    if not options:
         return None
+    safe_index = max(0, min(index, len(options) - 1))
+    return options[safe_index]
 
-    p = (BASE_DIR / name).resolve()
-    stem = p.with_suffix("").name
 
-    # Where to look
-    if p.parent != BASE_DIR:
-        search_dirs = [p.parent]
-    else:
-        search_dirs = [BASE_DIR / "signatures", BASE_DIR]
+def _safe_image(images, **kwargs) -> None:
+    """Call st.image when available."""
+    image_fn = getattr(st, "image", None)
+    if callable(image_fn):
+        image_fn(images, **kwargs)
 
-    exts = ["", ".png", ".jpg", ".jpeg", ".webp"]
-    for d in search_dirs:
-        for ext in exts:
-            candidate = (d / f"{stem}{ext}").resolve()
-            if candidate.exists():
-                return str(candidate)
-    return None
 
-def update_timesheet_template_by_discipline(template_path, all_rows, selected_dates, discipline):
-    wb = load_workbook(template_path)
+def _load_sheet_context():
+    """Return (data_rows, sites, error) while isolating failures."""
     try:
-        ws = wb.active
-
-        for date_str in selected_dates:
-            try:
-                day_num = int(pd.to_datetime(date_str, dayfirst=True).day)
-            except:
-                continue
-
-            # Filter rows by date AND discipline
-            day_rows = [
-                r for r in all_rows
-                if r[0] == date_str and st.session_state.get("discipline_radio") == discipline
-            ]
+        rows = get_sheet_data()
+        data_rows = rows[1:] if rows else []
+        sites, _ = get_unique_sites_and_dates(data_rows)
+        return data_rows, list(sites), None
+    except Exception as exc:  # pragma: no cover - user notification
+        return [], [], exc
 
 
+def _rows_to_structured_data(rows: list[list[str]]) -> list[dict[str, str]]:
+    """Convert row lists into dicts keyed by REPORT_HEADERS names."""
+    structured = []
+    header_count = len(REPORT_HEADERS)
+    for row in rows:
+        padded = (row + [""] * header_count)[:header_count]
+        entry = {header: value for header, value in zip(REPORT_HEADERS, padded)}
+        structured.append(entry)
+    return structured
 
 
-            # Extract and merge activities
-            activities = []
-            for r in day_rows:
-                site = r[1]
-                act1 = r[6] or ""
-                act2 = r[8] or ""
-                combined = " / ".join(filter(None, [act1.strip(), act2.strip()]))
-                if combined:
-                    activities.append(f"{site}: {combined}")
-
-            # Fill Excel row for the matching day number
-            for row in range(19, 60):
-                cell_value = ws[f"A{row}"].value
-                if cell_value == day_num:
-                    ws[f"F{row}"] = ", ".join(sites)
-                    ws[f"G{row}"] = "\n".join(activities[:8]) or "Supervision of site activities"
-                    break
-
-        output = BytesIO()
-        wb.save(output)
-        output.seek(0)
-        return output
-    finally:
-        wb.close()
-
-
-
-# ========= Weekly report helpers =========
-
-# Extract simple (Description, Unit, Quantity) from free-text like "Trench excavation 110 m"
-ACT_RE = re.compile(
-    r'(?P<desc>[A-Za-z /&\-\(\)]+?)\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<unit>m|mt|nos|poles?)\b',
-    re.I,
-)
-
-def activities_from_text(txt: str):
-    out = []
-    for m in ACT_RE.finditer(txt or ""):
-        desc = m.group('desc').strip().title()
-        qty = float(m.group('qty'))
-        unit = m.group('unit').lower()
-        # Normalize units
-        if unit in ("pole", "poles"):
-            unit = "Nos"
-        elif unit == "m":
-            unit = "mt"
-        else:
-            unit = unit.title()
-        out.append((desc, unit, qty))
-    return out
-
-def build_site_table(rows_this_site):
-    """Build Mon..Sun table for one site from daily rows."""
-    agg = {}  # (desc, unit) -> [Mon..Sun]
-    for r in rows_this_site:
-        d = pd.to_datetime(r[0], dayfirst=True, errors='coerce')
-        if pd.isna(d):
-            continue
-        dayi = int(d.weekday())  # Mon=0..Sun=6
-        # Use Work_Executed (idx 6) + Another_Work_Executed (idx 8)
-        texts = " ; ".join([(r[6] or ""), (r[8] or "")])
-        for desc, unit, qty in activities_from_text(texts):
-            key = (desc, unit)
-            agg.setdefault(key, [0,0,0,0,0,0,0])[dayi] += qty
-
-    table = []
-    for (desc, unit), days in agg.items():
-        table.append({
-            "Description": desc, "Unit": unit,
-            "Mon": days[0], "Tue": days[1], "Wed": days[2], "Thu": days[3],
-            "Fri": days[4], "Sat": days[5], "Sun": days[6],
-            "Total": sum(days)
-        })
-    table.sort(key=lambda x: (x["Description"], x["Unit"]))
-    return table
-
-def site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd):
-    """Build a subdocument with all uploaded images for a site within the week."""
-    start = pd.to_datetime(start_ymd, errors="coerce"); end = pd.to_datetime(end_ymd, errors="coerce")
-    sub = tpl.new_subdoc()
-    for (s, dstr), files in uploaded_map.items():
-        if s != site:
-            continue
-        d = pd.to_datetime(dstr, dayfirst=True, errors="coerce")
-        if pd.isna(d) or not (start <= d <= end):
-            continue
-        for f in files or []:
-            with tempfile.NamedTemporaryFile(delete=False) as t:
-                t.write(f.getbuffer()); t.flush()
-                p = sub.add_paragraph(); r = p.add_run()
-                r.add_picture(t.name, width=Mm(70))
-    return sub
-
-def build_weekly_context(rows, selected_sites, start_ymd, end_ymd, discipline, uploaded_map):
-    """
-    Returns (tpl, ctx) for Weekly_Report_Template.docx
-    - rows: sheet rows (padded)
-    - selected_sites: list[str]
-    - start_ymd/end_ymd: 'YYYY-MM-DD'
-    - discipline: 'Civil'|'Electrical'
-    - uploaded_map: {(site, date_str): [UploadedFile, ...]}
-    """
-    start = pd.to_datetime(start_ymd)
-    end = pd.to_datetime(end_ymd)
-    week_no = int(start.isocalendar().week)
-
-    # Filter rows into the week + sites
-    by_site = {}
-    for r in rows:
-        site = r[1].strip()
-        if site not in selected_sites:
-            continue
-        d = pd.to_datetime(r[0], dayfirst=True, errors="coerce")
-        if pd.isna(d) or not (start <= d <= end):
-            continue
-        by_site.setdefault(site, []).append(r)
-
-    tpl = DocxTemplate("Weekly_Report_Template.docx")
-
-    sites_ctx = []
-    all_challenges = []
-    ongoing_activities = []
-    planned_activities = []
-    hse_notes = []
-    pictures_by_site = {}
-
-    # Helper for blockers
-    def is_blocker(text):
-        t = (text or "").lower()
-        return any(k in t for k in ["delay", "blocked", "issue", "problem", "pending", "stoppage", "approval", "permit", "clearance"])
-
-    # Site-specific narratives and tables
-    for site, site_rows in sorted(by_site.items()):
-        table = build_site_table(site_rows)
-        # Build detailed narrative (customize per site)
-        narrative = f"Progress at {site}: "
-        if table:
-            acts = [f"{t['Description']} ({t['Total']} {t['Unit']})" for t in table if t['Total'] > 0]
-            narrative += ", ".join(acts) + ". "
-        else:
-            narrative += "No major activities recorded. "
-
-        # Challenges/issues
-        challenges = []
-        for r in site_rows:
-            combined = f"{r[7] or ''} {r[10] or ''}".strip()
-            if combined and is_blocker(combined):
-                challenges.append({"Site": site, "Issue": combined, "Impact": "Delay or risk"})
-        all_challenges.extend(challenges)
-
-        # Ongoing activities (example extraction)
-        for t in table:
-            if t['Total'] > 0:
-                ongoing_activities.append({
-                    "Activity": t['Description'],
-                    "Location": site,
-                    "Status": f"{t['Total']} {t['Unit']} completed",
-                    "Remarks": "Ongoing"
-                })
-
-        # Planned activities (example: next steps)
-        planned_activities.append({
-            "Site": site,
-            "Planned Activity": f"Continue {', '.join([t['Description'] for t in table])}",
-            "Remarks": "Coordinate for next phase"
-        })
-
-        # HSE notes (example extraction)
-        for r in site_rows:
-            hse_comment = r[9] or ""
-            if hse_comment:
-                hse_notes.append(f"{site}: {hse_comment}")
-
-        # Pictures
-        pics = site_pictures_subdoc(tpl, uploaded_map, site, start_ymd, end_ymd)
-        pictures_by_site[site] = pics
-
-        sites_ctx.append({
-            "Site_Name": site,
-            "Narrative": narrative,
-            "Table": table,
-            "Challenges": challenges,
-            "Pictures": pics
-        })
-
-    # Summary paragraph
-    summary = f"This week, {discipline.lower()} works progressed across all active sites. "
-    if sites_ctx:
-        summary += "Notable advancements: " + ", ".join([s['Narrative'] for s in sites_ctx])
-
-    # Signatures
-    sign = SIGNATORIES.get(discipline, {})
-    cons_sig_path = resolve_asset(sign.get("Consultant_Signature"))
-    cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-
-    ctx = {
-        "Week_No": f"{week_no:02d}",
-        "Period_From": start.strftime("%d/%m/%Y"),
-        "Period_To": end.strftime("%d/%m/%Y"),
-        "Doc_No": f"{week_no+1:02d}",
-        "Doc_Date": pd.Timestamp.today().strftime("%d/%m/%Y"),
-        "Project_Name": "Consultancy services related to Supervision of Engineering Design Supply and Installation of 15kV Switching Substations and Rehabilitation of Associated Distribution Lines in Kigali",
-        "Prepared_By": sign.get("Consultant_Name", ""),
-        "Prepared_Signature": cons_sig_img,
-        "Discipline": discipline,
-        "Summary": summary,
-        "Sites": sites_ctx,
-        "Challenges": all_challenges,
-        "Ongoing": ongoing_activities,
-        "Planned": planned_activities,
-        "HSE": "\n".join(hse_notes) if hse_notes else "Safety compliance remained high, with PPE usage observed on all sites. No accidents were reported.",
-        "Weekly_Images": pictures_by_site,
-    }
-    return tpl, ctx
-# ========= end weekly helpers =========
-
-    
-def normalize_date(d) -> str:
-    """Normalize date like '06/08/2025' -> '2025-08-06' (safe for logs etc.)."""
-    try:
-        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%Y-%m-%d")
-    except Exception:
-        return str(d).replace("/", "-").replace("\\", "-")
-
-
-def format_date_title(d: str) -> str:
-    """Return dd.MM.YYYY for filenames like 04.08.2025."""
-    try:
-        return pd.to_datetime(d, dayfirst=True, errors="raise").strftime("%d.%m.%Y")
-    except Exception:
-        # Fallback: normalize common separators to dots
-        return str(d).replace("/", ".").replace("-", ".")
-
-
-def safe_filename(s: str, max_len: int = 150) -> str:
-    """Remove illegal filename characters and tidy whitespace."""
-    s = str(s)
-    s = re.sub(r'[\\/:*?"<>|]+', "-", s)  # illegal on Windows + unsafe elsewhere
-    s = re.sub(r"\s+", " ", s).strip(" .-")
-    return s[:max_len]
-
-
-def merge_daily_reports(files):
-    """Merge multiple daily report DOCX files into a single document with page breaks."""
-    if not files:
-        return None
-
-    merged_doc = Document(BytesIO(files[0].getvalue()))
-    for f in files[1:]:
-        doc = Document(BytesIO(f.getvalue()))
-        merged_doc.add_page_break()
-        for element in doc.element.body:
-            merged_doc.element.body.append(element)
-
-    output = BytesIO()
-    merged_doc.save(output)
-    output.seek(0)
-    return output
-
-# -----------------------------
-# App config & constants
-# -----------------------------
-
-SHEET_ID = "1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI"
-SHEET_NAME = "Reports"
-TEMPLATE_PATH = "Site_Daily_report_Template_Date.docx"
-CACHE_FILE = BASE_DIR / "offline_cache.json"
-
-SIGNATORIES = {
-    "Civil": {
-        "Consultant_Name": "IRANZI Prince Jean Claude",
-        "Consultant_Title": "Civil Engineer",
-        # Keep stems; resolver will find .jpg/.png in repo root or ./signatures
-        "Consultant_Signature": "iranzi_prince_jean_claude",
-        "Contractor_Name": "RUTALINDWA Olivier",
-        "Contractor_Title": "Civil Engineer",
-        "Contractor_Signature": "rutalindwa_olivier",
-    },
-    "Electrical": {
-        "Consultant_Name": "Alexis IVUGIZA",
-        "Consultant_Title": "Electrical Engineer",
-        "Consultant_Signature": "alexis_ivugiza",
-        "Contractor_Name": "Issac HABIMANA",  # say if you want 'Isaac'
-        "Contractor_Title": "Electrical Engineer",
-        "Contractor_Signature": "issac_habimana",
-    },
-}
-
-REPORT_COLUMNS = [
-    "Date",
-    "Site_Name",
-    "District",
-    "Work",
-    "Human_Resources",
-    "Supply",
-    "Work_Executed",
-    "Comment_on_work",
-    "Another_Work_Executed",
-    "Comment_on_HSE",
-    "Consultant_Recommandation",
-]
-
-CABIN_ACTIVITY_PATTERN = re.compile(r"\bcabin\b", re.IGNORECASE)
-CABIN_CONTRACTOR_OVERRIDE = {
-    "Contractor_Name": "Rutarindwa Olivier",
-    "Contractor_Title": "Civil Engineer",
-    "Contractor_Signature": "rutalindwa_olivier",
-}
-
-
-def normalize_text_cell(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, float) and pd.isna(value):
-        return ""
-    return str(value).strip()
-
-
-def row_mentions_cabin(*fields: object) -> bool:
-    return any(CABIN_ACTIVITY_PATTERN.search(normalize_text_cell(field)) for field in fields)
-
-
-def signatories_for_daily_row(
-    discipline: str,
-    work: str,
-    work_executed: str,
-    another_work_executed: str,
-    comment_on_work: str,
-) -> dict[str, str]:
-    sign_info = dict(SIGNATORIES.get(discipline, {}))
-    if row_mentions_cabin(work, work_executed, another_work_executed, comment_on_work):
-        sign_info.update(CABIN_CONTRACTOR_OVERRIDE)
-    return sign_info
-
-
-def dataframe_rows_to_report_rows(df: pd.DataFrame) -> list[list[str]]:
-    if df.empty:
+def _normalized_review_rows(df: pd.DataFrame) -> list[list[str]]:
+    """Normalize edited table values back into report row lists."""
+    if df is None or df.empty:
         return []
-    normalized = df.reindex(columns=REPORT_COLUMNS).fillna("")
-    return [[normalize_text_cell(cell) for cell in row] for row in normalized.values.tolist()]
 
-# -----------------------------
-# Google Sheets & offline cache
-# -----------------------------
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+    normalized = df.reindex(columns=REPORT_HEADERS).fillna("")
+    rows: list[list[str]] = []
+    for row in normalized.values.tolist():
+        rows.append([str(cell).strip() for cell in row])
+    return rows
 
-def _build_service():
-    service_account_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    creds = service_account.Credentials.from_service_account_info(
-        service_account_info, scopes=SCOPES
+
+def _file_path_to_data_uri(path: str | None) -> str:
+    """Return data URI for an image file path."""
+    if not path:
+        return ""
+
+    ext = Path(path).suffix.lower()
+    mime = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }.get(ext, "image/jpeg")
+
+    try:
+        encoded = base64.b64encode(Path(path).read_bytes()).decode("utf-8")
+    except OSError:
+        return ""
+    return f"data:{mime};base64,{encoded}"
+
+
+def _bytes_to_data_uri(image_bytes: bytes, mime: str = "image/jpeg") -> str:
+    """Return data URI for raw bytes."""
+    return f"data:{mime};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+
+
+def _preview_text(value: object) -> str:
+    """Escape text for HTML preview blocks."""
+    return html.escape(str(value or "")).replace("\n", "<br>")
+
+
+def _word_style_preview_html(
+    row: list[str],
+    discipline: str,
+    image_bytes: list[bytes],
+    img_width_mm: int,
+    img_height_mm: int,
+) -> str:
+    """Build a page-like HTML preview sized close to an A4 Word page."""
+    (
+        date,
+        site_name,
+        district,
+        work,
+        human_resources,
+        supply,
+        work_executed,
+        comment_on_work,
+        another_work_executed,
+        comment_on_hse,
+        consultant_recommandation,
+        non_compliant_work,
+        reaction_way_forward,
+        challenges,
+    ) = (row + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)]
+
+    sign_info = signatories_for_row(
+        discipline,
+        site_name,
+        work,
+        work_executed,
+        another_work_executed,
+        comment_on_work,
     )
-    return build("sheets", "v4", credentials=creds)
 
-@st.cache_data(ttl=300)
-def get_sheet_data() -> list[list[str]]:
-    service = _build_service()
-    sheet = service.spreadsheets()
+    consultant_sig_uri = _file_path_to_data_uri(resolve_asset(sign_info.get("Consultant_Signature")))
+    contractor_sig_uri = _file_path_to_data_uri(resolve_asset(sign_info.get("Contractor_Signature")))
 
-    result = sheet.values().get(
-        spreadsheetId=SHEET_ID,
-        range=f"{SHEET_NAME}!A:K",  # open-ended range
-    ).execute()
-    rows = result.get("values", [])
-    padded_rows = [row + [""] * (11 - len(row)) for row in rows]
-    return padded_rows
+    image_blocks = []
+    for idx, img in enumerate(image_bytes or []):
+        image_blocks.append(
+            """
+            <figure class="rp-photo">
+                <img src="{src}" alt="Photo {idx}" style="width:{width}mm; {height_css}" />
+                <figcaption>Photo {idx}</figcaption>
+            </figure>
+            """.format(
+                src=_bytes_to_data_uri(img),
+                idx=idx + 1,
+                width=max(1, int(img_width_mm)),
+                height_css=(f"height:{max(1, int(img_height_mm))}mm; object-fit:cover;" if img_height_mm else ""),
+            )
+        )
+
+    photos_html = "\n".join(image_blocks) if image_blocks else '<div class="rp-muted">No images uploaded for this report.</div>'
+
+    consultant_sig_block = (
+        f'<img class="rp-sign-img" src="{consultant_sig_uri}" alt="Consultant signature" />'
+        if consultant_sig_uri
+        else '<div class="rp-sign-missing">No signature image found</div>'
+    )
+    contractor_sig_block = (
+        f'<img class="rp-sign-img" src="{contractor_sig_uri}" alt="Contractor signature" />'
+        if contractor_sig_uri
+        else '<div class="rp-sign-missing">No signature image found</div>'
+    )
+
+    return f"""
+    <style>
+      .rp-shell {{
+        border: 1px solid #d0d5dd;
+        border-radius: 10px;
+        background: #f5f7fa;
+        padding: 12px;
+        overflow-x: auto;
+      }}
+      .rp-page {{
+        width: min(210mm, 100%);
+        min-height: 297mm;
+        margin: 0 auto;
+        box-sizing: border-box;
+        padding: 14mm;
+        background: #fff;
+        border: 1px solid #c3cad4;
+        box-shadow: 0 8px 24px rgba(16, 24, 40, 0.15);
+        color: #111827;
+        font-family: "Times New Roman", Georgia, serif;
+        font-size: 12pt;
+        line-height: 1.45;
+      }}
+      .rp-title {{
+        text-align: center;
+        font-size: 16pt;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }}
+      .rp-meta {{
+        border: 1px solid #d1d5db;
+        padding: 8px;
+        margin-bottom: 8px;
+      }}
+      .rp-meta-row {{
+        display: grid;
+        grid-template-columns: 130px 1fr;
+        gap: 8px;
+        margin-bottom: 4px;
+      }}
+      .rp-meta-row:last-child {{ margin-bottom: 0; }}
+      .rp-label {{ font-weight: 700; }}
+      .rp-section {{
+        border: 1px solid #d1d5db;
+        padding: 8px;
+        margin-bottom: 8px;
+      }}
+      .rp-section-title {{
+        text-transform: uppercase;
+        font-weight: 700;
+        margin-bottom: 4px;
+      }}
+      .rp-photos {{ display: grid; gap: 10px; }}
+      .rp-photo {{ margin: 0; }}
+      .rp-photo figcaption {{ color: #475467; font-size: 10pt; margin-top: 4px; }}
+      .rp-sign-grid {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 10px;
+      }}
+      .rp-sign-card {{ border-top: 1px solid #111827; padding-top: 8px; }}
+      .rp-sign-img {{ max-width: 42mm; max-height: 20mm; margin-bottom: 4px; object-fit: contain; }}
+      .rp-sign-missing {{ color: #667085; font-size: 10pt; margin-bottom: 6px; }}
+      .rp-muted {{ color: #667085; font-style: italic; }}
+      @media (max-width: 900px) {{
+        .rp-page {{ width: 100%; min-height: auto; padding: 18px; }}
+        .rp-sign-grid {{ grid-template-columns: 1fr; }}
+      }}
+    </style>
+
+    <div class="rp-shell">
+      <div class="rp-page">
+        <div class="rp-title">SITE DAILY REPORT PREVIEW</div>
+
+        <div class="rp-meta">
+          <div class="rp-meta-row"><div class="rp-label">Date</div><div>{_preview_text(date)}</div></div>
+          <div class="rp-meta-row"><div class="rp-label">Site</div><div>{_preview_text(site_name)}</div></div>
+          <div class="rp-meta-row"><div class="rp-label">District</div><div>{_preview_text(district)}</div></div>
+          <div class="rp-meta-row"><div class="rp-label">Discipline</div><div>{_preview_text(discipline)}</div></div>
+        </div>
+
+        <div class="rp-section"><div class="rp-section-title">Work</div>{_preview_text(work)}</div>
+        <div class="rp-section"><div class="rp-section-title">Human Resources</div>{_preview_text(human_resources)}</div>
+        <div class="rp-section"><div class="rp-section-title">Supply</div>{_preview_text(supply)}</div>
+        <div class="rp-section"><div class="rp-section-title">Work Executed</div>{_preview_text(work_executed)}</div>
+        <div class="rp-section"><div class="rp-section-title">Comment on Work</div>{_preview_text(comment_on_work)}</div>
+        <div class="rp-section"><div class="rp-section-title">Another Work Executed</div>{_preview_text(another_work_executed)}</div>
+        <div class="rp-section"><div class="rp-section-title">Comment on HSE</div>{_preview_text(comment_on_hse)}</div>
+        <div class="rp-section"><div class="rp-section-title">Consultant Recommendation</div>{_preview_text(consultant_recommandation)}</div>
+        <div class="rp-section"><div class="rp-section-title">Non Compliant Work</div>{_preview_text(non_compliant_work)}</div>
+        <div class="rp-section"><div class="rp-section-title">Reaction and Way Forward</div>{_preview_text(reaction_way_forward)}</div>
+        <div class="rp-section"><div class="rp-section-title">Challenges</div>{_preview_text(challenges)}</div>
+
+        <div class="rp-section">
+          <div class="rp-section-title">Photos ({len(image_bytes or [])})</div>
+          <div class="rp-photos">{photos_html}</div>
+        </div>
+
+        <div class="rp-sign-grid">
+          <div class="rp-sign-card">
+            {consultant_sig_block}
+            <div class="rp-label">{_preview_text(sign_info.get("Consultant_Name", ""))}</div>
+            <div>{_preview_text(sign_info.get("Consultant_Title", ""))}</div>
+          </div>
+          <div class="rp-sign-card">
+            {contractor_sig_block}
+            <div class="rp-label">{_preview_text(sign_info.get("Contractor_Name", ""))}</div>
+            <div>{_preview_text(sign_info.get("Contractor_Title", ""))}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
 
 
-def append_rows_to_sheet(rows: list[list[str]]):
-    if not rows:
+def run_app():
+    """Render the Streamlit interface."""
+    set_background("bg.jpg")
+    render_hero(
+        title="Smart Field Reporting for Electrical and Civil Works",
+        subtitle="A modern reporting system for engineers, supervisors and consultants.",
+        cta_primary="Generate Reports",
+        cta_secondary="Upload Site Data",
+        image_path="bg.jpg",
+    )
+    _safe_markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
+    render_workwatch_header()
+
+    _safe_markdown(
+        """
+        <style>
+        div[data-testid="stRadio"] label {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        div[data-testid="stMultiSelect"] label {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        div[data-testid="stMultiSelect"] input {
+            min-height: 44px;
+            font-size: 0.95rem;
+        }
+        div[data-baseweb="select"] > div {
+            min-height: 46px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.sidebar.subheader("Gallery Controls")
+    img_width_mm = st.sidebar.slider(
+        "Image width (mm)", min_value=50, max_value=250, value=185, step=5
+    )
+    img_height_mm = st.sidebar.slider(
+        "Image height (mm)", min_value=50, max_value=250, value=148, step=5
+    )
+    st.sidebar.caption(
+        "Images default to 185 mm x 148 mm each, arranged two per row with a 5 mm gap."
+    )
+    add_border = st.sidebar.checkbox("Add border to images", value=False)
+    spacing_mm = st.sidebar.slider(
+        "Gap between images (mm)", min_value=0, max_value=20, value=5, step=1
+    )
+
+    data_rows, sites, data_error = _load_sheet_context()
+
+    if data_error is not None:  # pragma: no cover - user notification
+        st.error(f"Failed to load site data: {data_error}")
         return
-    service = _build_service()
-    body = {"values": rows}
-    service.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
-        range=SHEET_NAME,
-        valueInputOption="USER_ENTERED",
-        body=body,
-    ).execute()
 
+    container_fn = getattr(st, "container", None)
+    filters_container = container_fn() if callable(container_fn) else nullcontext()
+    with filters_container:
+        discipline_column, selectors_column = _safe_columns((0.9, 1.8), gap="large")
 
-def load_offline_cache():
-    if CACHE_FILE.exists():
-        try:
-            with open(CACHE_FILE, "r") as fh:
-                return json.load(fh)
-        except Exception:
-            return None
-    return None
-
-
-def save_offline_cache(rows, uploads):
-    data = {
-        "rows": rows,
-        "uploads": {
-            f"{site}|{date}": [
-                {
-                    "name": f.name,
-                    "data": base64.b64encode(f.getbuffer()).decode("utf-8"),
-                }
-                for f in (files or [])
-            ]
-            for (site, date), files in uploads.items()
-        },
-    }
-    with open(CACHE_FILE, "w") as fh:
-        json.dump(data, fh)
-
-
-def get_unique_sites_and_dates(rows: list[list[str]]):
-    sites = sorted({row[1].strip() for row in rows if len(row) > 1 and row[1].strip()})
-    dates = sorted({row[0].strip() for row in rows if len(row) > 0 and row[0].strip()})
-    return sites, dates
-
-# -----------------------------
-# UI
-# -----------------------------
-st.title("Site Daily Report Generator (Pro)")
-
-cache = load_offline_cache()
-if cache and cache.get("rows"):
-    st.info("Cached offline data detected. Use the button below to sync back to the Google Sheet.")
-    if st.button("Sync cached data to Google Sheet"):
-        try:
-            append_rows_to_sheet(cache.get("rows", []))
-            CACHE_FILE.unlink()
-            st.success("Cached data synced to Google Sheet.")
-            cache = None
-        except Exception as e:
-            st.error(f"Sync failed: {e}")
-
-try:
-    rows = get_sheet_data()
-except Exception as e:
-    rows = []
-    st.warning("Unable to fetch data from the Google Sheet.")
-
-if not rows:
-    st.warning("No data found in the Google Sheet.")
-    st.stop()
-
-sites, all_dates = get_unique_sites_and_dates(rows)
-
-with st.sidebar:
-    offline_enabled = st.checkbox("Enable offline cache", value=False)
-    st.header("Select Discipline")
-    discipline = st.radio(
-        "Choose discipline:", ["Civil", "Electrical"], index=0, key="discipline_radio"
-    )
-
-    st.header("Select Sites")
-    site_choices = ["All Sites"] + sites
-    selected_sites = st.multiselect(
-        "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
-    )
-    if "All Sites" in selected_sites or not selected_sites:
-        selected_sites = sites
-
-    st.header("Select Dates")
-    site_dates = sorted({row[0].strip() for row in rows if row[1].strip() in selected_sites})
-    date_choices = ["All Dates"] + site_dates
-    selected_dates = st.multiselect(
-        "Choose dates:", date_choices, default=["All Dates"], key="dates_ms"
-    )
-    if "All Dates" in selected_dates or not selected_dates:
-        selected_dates = site_dates
-
-# Filtered rows
-filtered_rows = [
-    row for row in rows
-    if row[1].strip() in selected_sites and row[0].strip() in selected_dates
-]
-
-# (site, date) pairs for upload mapping
-site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
-
-# Upload mappings
-uploaded_image_mapping: dict[tuple[str, str], list] = {}
-image_width_mm_mapping: dict[tuple[str, str], int] = {}
-
-# Preview
-st.subheader("Preview Reports to be Generated")
-show_dashboard = st.checkbox("Show Dashboard")
-df_preview = pd.DataFrame(
-    [(row + [""] * len(REPORT_COLUMNS))[: len(REPORT_COLUMNS)] for row in filtered_rows],
-    columns=REPORT_COLUMNS,
-)
-st.dataframe(df_preview, use_container_width=True, hide_index=True)
-
-st.subheader("Review Before Download")
-st.caption(
-    "Edit report text before generation. Date and site are locked so uploaded images stay linked."
-)
-review_df = st.data_editor(
-    df_preview,
-    use_container_width=True,
-    hide_index=True,
-    disabled=["Date", "Site_Name"],
-    key="daily_report_review_editor",
-)
-review_rows = dataframe_rows_to_report_rows(review_df)
-
-cabin_report_count = sum(
-    1
-    for row in review_rows
-    if row_mentions_cabin(row[3], row[6], row[8], row[7])
-)
-if cabin_report_count:
-    st.info(
-        f"{cabin_report_count} report(s) mention cabin activities. "
-        "The contractor representative will be set to Rutarindwa Olivier (Civil Engineer)."
-    )
-
-if show_dashboard:
-    dash_df = review_df.copy()
-    dash_df = dash_df[dash_df["Site_Name"].isin(selected_sites)]
-    dash_df = dash_df[dash_df["Date"].isin(selected_dates)]
-    if "Discipline" in dash_df.columns:
-        dash_df = dash_df[dash_df["Discipline"] == discipline]
-
-    st.subheader("Dashboard")
-    st.dataframe(dash_df, use_container_width=True, hide_index=True)
-
-    if "Work_Executed" in dash_df.columns:
-        dash_df = dash_df.assign(
-            Work_Executed=pd.to_numeric(dash_df["Work_Executed"], errors="coerce"),
-            Date=pd.to_datetime(dash_df["Date"], errors="coerce"),
-        ).dropna(subset=["Work_Executed", "Date"])
-        if not dash_df.empty:
-            st.line_chart(
-                dash_df.sort_values("Date").set_index("Date")["Work_Executed"]
+        with discipline_column:
+            discipline = st.radio(
+                "Discipline",
+                ["Civil", "Electrical"],
+                key="discipline_radio",
             )
 
-# Image uploads
-if site_date_pairs:
-    for site_name, date in site_date_pairs:
-        with st.expander(f"Upload Images for {site_name} ({date})"):
-            imgs = st.file_uploader(
-                f"Images for {site_name} ({date})",
-                accept_multiple_files=True,
-                key=f"uploader_{site_name}_{date}",
-            )
-            uploaded_image_mapping[(site_name, date)] = imgs
+        with selectors_column:
+            sites_column, dates_column = _safe_columns(2, gap="large")
 
-            image_width_mm = st.slider(
-                "Image width in report (mm)",
-                min_value=40,
-                max_value=140,
-                value=70,
-                key=f"img_width_mm_{site_name}_{date}",
-            )
-            image_width_mm_mapping[(site_name, date)] = image_width_mm
+            site_options = ["All Sites"] + sites if sites else ["All Sites"]
+            default_sites = ["All Sites"] if site_options else []
 
-            if imgs:
-                st.image(
-                    [img.getvalue() for img in imgs],
-                    caption=[img.name for img in imgs],
-                    width=240,
+            with sites_column:
+                st.subheader("Select Sites")
+                selected_sites_raw = st.multiselect(
+                    "Choose sites:",
+                    site_options,
+                    default=default_sites,
+                    key="sites_ms",
                 )
-else:
-    st.info("No site/date pairs in current filter. Adjust filters to upload images.")
 
+            if "All Sites" in selected_sites_raw or not selected_sites_raw:
+                selected_sites = sites.copy()
+            else:
+                selected_sites = selected_sites_raw
 
-# -----------------------------
-# Generate reports
-# -----------------------------
-if st.button("Generate & Download All Reports"):
-    if not review_rows:
-        st.warning("No rows selected for generation.")
-    else:
-        with st.spinner("Generating reports, please wait..."):
-            temp_dir = tempfile.mkdtemp()
-            zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-
-            with zipfile.ZipFile(zip_buffer, "w") as zipf:
-                for row in review_rows:
-                    (
-                        date,
-                        site_name,
-                        district,
-                        work,
-                        human_resources,
-                        supply,
-                        work_executed,
-                        comment_on_work,
-                        another_work_executed,
-                        comment_on_hse,
-                        consultant_recommandation,
-                    ) = (row + [""] * len(REPORT_COLUMNS))[: len(REPORT_COLUMNS)]
-
-                    tpl = DocxTemplate(TEMPLATE_PATH)
-
-                    # Images from uploader -> put each photo in a subdocument paragraph
-                    image_files = uploaded_image_mapping.get((site_name, date), []) or []
-                    image_width_mm = image_width_mm_mapping.get((site_name, date), 70)
-                    images_subdoc = tpl.new_subdoc()
-                    for img_file in image_files:
-                        img_path = os.path.join(temp_dir, img_file.name)
-                        with open(img_path, "wb") as f:
-                            f.write(img_file.getbuffer())
-                        p = images_subdoc.add_paragraph()
-                        r = p.add_run()
-                        r.add_picture(img_path, width=Mm(image_width_mm))
-
-                    # Signatories (names/titles + signatures)
-                    sign_info = signatories_for_daily_row(
-                        discipline,
-                        work,
-                        work_executed,
-                        another_work_executed,
-                        comment_on_work,
-                    )
-                    cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
-                    cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
-                    cons_sig_img = (
-                        InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-                    )
-                    cont_sig_img = (
-                        InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
-                    )
-
-                    # Context for DOCX
-                    context = {
-                        "Site_Name": site_name or "",
-                        "Date": date or "",
-                        "District": district or "",
-                        "Work": work or "",
-                        "Human_Resources": human_resources or "",
-                        "Supply": supply or "",
-                        "Work_Executed": work_executed or "",
-                        "Comment_on_work": comment_on_work or "",
-                        "Another_Work_Executed": another_work_executed or "",
-                        "Comment_on_HSE": comment_on_hse or "",
-                        "Consultant_Recommandation": consultant_recommandation or "",
-                        "Images": images_subdoc,
-                        "Consultant_Name": sign_info.get("Consultant_Name", ""),
-                        "Consultant_Title": sign_info.get("Consultant_Title", ""),
-                        "Contractor_Name": sign_info.get("Contractor_Name", ""),
-                        "Contractor_Title": sign_info.get("Contractor_Title", ""),
-                        "Consultant_Signature": cons_sig_img,
-                        "Contractor_Signature": cont_sig_img,
-                    }
-
-                    tpl.render(context)
-
-                    # Filename pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
-                    date_for_title = format_date_title(date)
-                    out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
-                    out_name = safe_filename(out_name)
-                    out_path = os.path.join(temp_dir, out_name)
-
-                    tpl.save(out_path)
-                    zipf.write(out_path, arcname=out_name)
-
-            zip_buffer.flush()
-            zip_buffer.seek(0)
-            st.download_button(
-                "Download ZIP",
-                data=zip_buffer.read(),
-                file_name="daily_reports.zip",
-                mime="application/zip",
+            available_dates = sorted(
+                {
+                    row[0].strip()
+                    for row in data_rows
+                    if not selected_sites or row[1].strip() in selected_sites
+                }
             )
-st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
-st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
 
-# -----------------------------
-# Weekly report
-# -----------------------------
-# Determine the date range for the weekly report
-selected_dt = pd.to_datetime(selected_dates, dayfirst=True, errors="coerce")
-start_ymd = selected_dt.min().strftime("%Y-%m-%d")
-end_ymd = selected_dt.max().strftime("%Y-%m-%d")
+            date_options = ["All Dates"] + available_dates if available_dates else ["All Dates"]
+            default_dates = ["All Dates"] if available_dates else []
 
-# Build context and template for the weekly report
-tpl, ctx = build_weekly_context(
-    rows,
-    selected_sites,
-    start_ymd,
-    end_ymd,
-    discipline,
-    uploaded_image_mapping,
-)
+            with dates_column:
+                st.subheader("Select Dates")
+                selected_dates_raw = st.multiselect(
+                    "Choose dates:",
+                    date_options,
+                    default=default_dates,
+                    key="dates_ms",
+                )
 
-tpl.render(ctx)
-fname = (
-    f"{discipline}_Weekly_Report_Week_{ctx['Week_No']}"
-    f"_{ctx['Period_From'].replace('/','.')}_{ctx['Period_To'].replace('/','.')}.docx"
-)
-tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
-tpl.save(tmp.name)
-with open(tmp.name, "rb") as fh:
-    st.download_button(
-        "Download Weekly Report",
-        data=fh.read(),
-        file_name=fname,
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            if "All Dates" in selected_dates_raw or not selected_dates_raw:
+                selected_dates = available_dates
+            else:
+                selected_dates = selected_dates_raw
+
+    cache = load_offline_cache()
+    if cache and cache.get("rows"):
+        st.info(
+            "Cached offline data detected. Use the button below to sync back to the Google Sheet."
+        )
+        if st.button("Sync cached data to Google Sheet"):
+            try:
+                append_rows_to_sheet(cache.get("rows", []))
+                CACHE_FILE.unlink()
+                st.success("Cached data synced to Google Sheet.")
+            except Exception as exc:  # pragma: no cover - user notification
+                st.error(f"Sync failed: {exc}")
+
+    filtered_rows = [
+        row
+        for row in data_rows
+        if row[1].strip() in selected_sites and row[0].strip() in selected_dates
+    ]
+
+    site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
+
+    st.subheader("Preview Reports to be Generated")
+    df_preview = pd.DataFrame(filtered_rows, columns=REPORT_HEADERS)
+    st.dataframe(df_preview)
+
+    st.subheader("Review Before Download")
+    _safe_caption(
+        "Edit report text before generation. Date and Site_Name are locked so uploaded images stay linked."
     )
 
+    review_df = _safe_data_editor(
+        df_preview,
+        use_container_width=True,
+        hide_index=True,
+        disabled=["Date", "Site_Name"],
+        key="review_editor",
+    )
+    review_rows = _normalized_review_rows(review_df)
+
+    if not review_rows:
+        review_rows = [
+            (row + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)]
+            for row in filtered_rows
+        ]
+
+    cabin_rows = 0
+    for row in review_rows:
+        sign_info = signatories_for_row(
+            discipline,
+            row[1],
+            row[3],
+            row[6],
+            row[8],
+            row[7],
+        )
+        if sign_info.get("Contractor_Name") == "Rutarindwa Olivier":
+            cabin_rows += 1
+
+    if cabin_rows:
+        st.info(
+            f"{cabin_rows} report(s) include cabin activities. "
+            "Contractor representative is set to Rutarindwa Olivier (Civil Engineer)."
+        )
+
+    structured_from_rows = _rows_to_structured_data(review_rows)
+    if st.session_state.get("_structured_origin") != "manual":
+        st.session_state["structured_report_data"] = structured_from_rows
+        st.session_state["_structured_origin"] = "rows"
+
+    _safe_markdown('<div id="upload-section"></div>', unsafe_allow_html=True)
+
+    for site, date in site_date_pairs:
+        files = st.file_uploader(
+            f"Upload images for {site} - {date}",
+            accept_multiple_files=True,
+            type=["png", "jpg", "jpeg", "webp"],
+            key=f"uploader_{site}_{date}",
+        )
+        if files:
+            key = (site.strip(), date.strip())
+            st.session_state.setdefault("images", {})[key] = [f.read() for f in files]
+            _safe_image(st.session_state["images"][key], width=220)
+
+    st.subheader("Template-Size Report Preview")
+    _safe_caption(
+        "Word-style A4 preview of a selected report row before download."
+    )
+
+    if review_rows:
+        preview_options = list(range(len(review_rows)))
+        preview_idx = _safe_selectbox(
+            "Choose report to preview",
+            options=preview_options,
+            index=0,
+            format_func=lambda idx: f"{review_rows[idx][1]} - {review_rows[idx][0]}",
+            key="preview_report_select",
+        )
+        if preview_idx is None:
+            preview_idx = 0
+
+        preview_row = review_rows[int(preview_idx)]
+        preview_key = (preview_row[1].strip(), preview_row[0].strip())
+        preview_images = st.session_state.get("images", {}).get(preview_key, [])
+
+        _safe_markdown(
+            _word_style_preview_html(
+                preview_row,
+                discipline,
+                preview_images,
+                img_width_mm,
+                img_height_mm,
+            ),
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("No rows available for template preview.")
+
+    st.subheader("Contractor Report Parser")
+    enable_parser = _safe_checkbox(
+        "Enable manual contractor report parsing", value=False, key="enable_parser"
+    )
+
+    if enable_parser:
+        raw_report_text = st.text_area("Paste contractor report text")
+        if st.button("Clean & Structure Report"):
+            try:
+                structured_report = clean_and_structure_report(raw_report_text)
+            except (TypeError, ValueError) as exc:
+                st.warning(f"Unable to structure report: {exc}")
+            else:
+                st.session_state["structured_report_data"] = structured_report
+                st.session_state["_structured_origin"] = "manual"
+
+    st.json(st.session_state.get("structured_report_data", structured_from_rows))
+
+    if st.button("Generate Reports"):
+        if not review_rows:
+            st.warning("No data available for the selected sites and dates.")
+            return
+
+        zip_bytes = generate_reports(
+            review_rows,
+            st.session_state.get("images", {}),
+            discipline,
+            img_width_mm,
+            img_height_mm,
+            spacing_mm,
+            img_per_row=2,
+            add_border=add_border,
+        )
+        st.download_button("Download ZIP", zip_bytes, "reports.zip")
 
 
-
-
-
-
+if __name__ == "__main__":
+    run_app()
