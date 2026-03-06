@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import base64
 import html
+import re
+import textwrap
+import zipfile
 from contextlib import nullcontext
-from pathlib import Path
+from io import BytesIO
 from typing import Any
 
 import pandas as pd
 import streamlit as st
-
 from sheets import (
     CACHE_FILE,
     append_rows_to_sheet,
@@ -16,12 +18,10 @@ from sheets import (
     get_unique_sites_and_dates,
     load_offline_cache,
 )
-from report import generate_reports, resolve_asset, signatories_for_row
+from report import generate_reports, signatories_for_row
 from report_structuring import REPORT_HEADERS, clean_and_structure_report
 from ui import render_workwatch_header, set_background
 from ui_hero import render_hero
-
-BASE_DIR = Path(__file__).parent.resolve()
 
 st.set_page_config(page_title="WorkWatch - Site Intelligence", layout="wide")
 
@@ -132,26 +132,6 @@ def _normalized_review_rows(df: pd.DataFrame) -> list[list[str]]:
     return rows
 
 
-def _file_path_to_data_uri(path: str | None) -> str:
-    """Return data URI for an image file path."""
-    if not path:
-        return ""
-
-    ext = Path(path).suffix.lower()
-    mime = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-    }.get(ext, "image/jpeg")
-
-    try:
-        encoded = base64.b64encode(Path(path).read_bytes()).decode("utf-8")
-    except OSError:
-        return ""
-    return f"data:{mime};base64,{encoded}"
-
-
 def _bytes_to_data_uri(image_bytes: bytes, mime: str = "image/jpeg") -> str:
     """Return data URI for raw bytes."""
     return f"data:{mime};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
@@ -162,186 +142,151 @@ def _preview_text(value: object) -> str:
     return html.escape(str(value or "")).replace("\n", "<br>")
 
 
-def _word_style_preview_html(
-    row: list[str],
-    discipline: str,
-    image_bytes: list[bytes],
-    img_width_mm: int,
-    img_height_mm: int,
-) -> str:
-    """Build a page-like HTML preview sized close to an A4 Word page."""
-    (
-        date,
-        site_name,
-        district,
-        work,
-        human_resources,
-        supply,
-        work_executed,
-        comment_on_work,
-        another_work_executed,
-        comment_on_hse,
-        consultant_recommandation,
-        non_compliant_work,
-        reaction_way_forward,
-        challenges,
-    ) = (row + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)]
+def _docx_cell_html(cell, related_parts) -> str:
+    """Render one DOCX table cell into HTML, including embedded images."""
+    parts = []
+    for para in cell.paragraphs:
+        text = (para.text or "").strip()
+        if text:
+            parts.append(f"<div>{_preview_text(text)}</div>")
 
-    sign_info = signatories_for_row(
-        discipline,
-        site_name,
-        work,
-        work_executed,
-        another_work_executed,
-        comment_on_work,
-    )
-
-    consultant_sig_uri = _file_path_to_data_uri(resolve_asset(sign_info.get("Consultant_Signature")))
-    contractor_sig_uri = _file_path_to_data_uri(resolve_asset(sign_info.get("Contractor_Signature")))
-
-    image_blocks = []
-    for idx, img in enumerate(image_bytes or []):
-        image_blocks.append(
-            """
-            <figure class="rp-photo">
-                <img src="{src}" alt="Photo {idx}" style="width:{width}mm; {height_css}" />
-                <figcaption>Photo {idx}</figcaption>
-            </figure>
-            """.format(
-                src=_bytes_to_data_uri(img),
-                idx=idx + 1,
-                width=max(1, int(img_width_mm)),
-                height_css=(f"height:{max(1, int(img_height_mm))}mm; object-fit:cover;" if img_height_mm else ""),
-            )
+    rel_ids = sorted(set(re.findall(r'r:embed="([^"]+)"', cell._tc.xml)))
+    for rel_id in rel_ids:
+        image_part = related_parts.get(rel_id)
+        if not image_part:
+            continue
+        mime = getattr(image_part, "content_type", "image/jpeg")
+        parts.append(
+            f'<img class="tpl-image" src="{_bytes_to_data_uri(image_part.blob, mime)}" alt="Embedded image" />'
         )
 
-    photos_html = "\n".join(image_blocks) if image_blocks else '<div class="rp-muted">No images uploaded for this report.</div>'
+    return "".join(parts) if parts else "&nbsp;"
 
-    consultant_sig_block = (
-        f'<img class="rp-sign-img" src="{consultant_sig_uri}" alt="Consultant signature" />'
-        if consultant_sig_uri
-        else '<div class="rp-sign-missing">No signature image found</div>'
-    )
-    contractor_sig_block = (
-        f'<img class="rp-sign-img" src="{contractor_sig_uri}" alt="Contractor signature" />'
-        if contractor_sig_uri
-        else '<div class="rp-sign-missing">No signature image found</div>'
-    )
 
-    return f"""
-    <style>
-      .rp-shell {{
-        border: 1px solid #d0d5dd;
-        border-radius: 10px;
-        background: #f5f7fa;
-        padding: 12px;
-        overflow-x: auto;
-      }}
-      .rp-page {{
-        width: min(210mm, 100%);
-        min-height: 297mm;
-        margin: 0 auto;
-        box-sizing: border-box;
-        padding: 14mm;
-        background: #fff;
-        border: 1px solid #c3cad4;
-        box-shadow: 0 8px 24px rgba(16, 24, 40, 0.15);
-        color: #111827;
-        font-family: "Times New Roman", Georgia, serif;
-        font-size: 12pt;
-        line-height: 1.45;
-      }}
-      .rp-title {{
-        text-align: center;
-        font-size: 16pt;
-        font-weight: 700;
-        margin-bottom: 8px;
-      }}
-      .rp-meta {{
-        border: 1px solid #d1d5db;
-        padding: 8px;
-        margin-bottom: 8px;
-      }}
-      .rp-meta-row {{
-        display: grid;
-        grid-template-columns: 130px 1fr;
-        gap: 8px;
-        margin-bottom: 4px;
-      }}
-      .rp-meta-row:last-child {{ margin-bottom: 0; }}
-      .rp-label {{ font-weight: 700; }}
-      .rp-section {{
-        border: 1px solid #d1d5db;
-        padding: 8px;
-        margin-bottom: 8px;
-      }}
-      .rp-section-title {{
-        text-transform: uppercase;
-        font-weight: 700;
-        margin-bottom: 4px;
-      }}
-      .rp-photos {{ display: grid; gap: 10px; }}
-      .rp-photo {{ margin: 0; }}
-      .rp-photo figcaption {{ color: #475467; font-size: 10pt; margin-top: 4px; }}
-      .rp-sign-grid {{
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-        margin-top: 10px;
-      }}
-      .rp-sign-card {{ border-top: 1px solid #111827; padding-top: 8px; }}
-      .rp-sign-img {{ max-width: 42mm; max-height: 20mm; margin-bottom: 4px; object-fit: contain; }}
-      .rp-sign-missing {{ color: #667085; font-size: 10pt; margin-bottom: 6px; }}
-      .rp-muted {{ color: #667085; font-style: italic; }}
-      @media (max-width: 900px) {{
-        .rp-page {{ width: 100%; min-height: auto; padding: 18px; }}
-        .rp-sign-grid {{ grid-template-columns: 1fr; }}
-      }}
-    </style>
+def _render_template_preview_html(docx_bytes: bytes) -> str:
+    """Build an A4 preview using the generated DOCX structure (template-based)."""
+    from docx import Document
 
-    <div class="rp-shell">
-      <div class="rp-page">
-        <div class="rp-title">SITE DAILY REPORT PREVIEW</div>
+    document = Document(BytesIO(docx_bytes))
 
-        <div class="rp-meta">
-          <div class="rp-meta-row"><div class="rp-label">Date</div><div>{_preview_text(date)}</div></div>
-          <div class="rp-meta-row"><div class="rp-label">Site</div><div>{_preview_text(site_name)}</div></div>
-          <div class="rp-meta-row"><div class="rp-label">District</div><div>{_preview_text(district)}</div></div>
-          <div class="rp-meta-row"><div class="rp-label">Discipline</div><div>{_preview_text(discipline)}</div></div>
-        </div>
+    para_html_parts = []
+    for para in document.paragraphs:
+        txt = (para.text or "").strip()
+        if txt:
+            para_html_parts.append(f"<p>{_preview_text(txt)}</p>")
+    paragraphs_html = "".join(para_html_parts)
 
-        <div class="rp-section"><div class="rp-section-title">Work</div>{_preview_text(work)}</div>
-        <div class="rp-section"><div class="rp-section-title">Human Resources</div>{_preview_text(human_resources)}</div>
-        <div class="rp-section"><div class="rp-section-title">Supply</div>{_preview_text(supply)}</div>
-        <div class="rp-section"><div class="rp-section-title">Work Executed</div>{_preview_text(work_executed)}</div>
-        <div class="rp-section"><div class="rp-section-title">Comment on Work</div>{_preview_text(comment_on_work)}</div>
-        <div class="rp-section"><div class="rp-section-title">Another Work Executed</div>{_preview_text(another_work_executed)}</div>
-        <div class="rp-section"><div class="rp-section-title">Comment on HSE</div>{_preview_text(comment_on_hse)}</div>
-        <div class="rp-section"><div class="rp-section-title">Consultant Recommendation</div>{_preview_text(consultant_recommandation)}</div>
-        <div class="rp-section"><div class="rp-section-title">Non Compliant Work</div>{_preview_text(non_compliant_work)}</div>
-        <div class="rp-section"><div class="rp-section-title">Reaction and Way Forward</div>{_preview_text(reaction_way_forward)}</div>
-        <div class="rp-section"><div class="rp-section-title">Challenges</div>{_preview_text(challenges)}</div>
+    table_html = '<div class="tpl-muted">No table content found in template preview.</div>'
+    if document.tables:
+        rows_html = []
+        first_table = document.tables[0]
+        for row in first_table.rows:
+            cells_html = []
+            for cell in row.cells:
+                cell_html = _docx_cell_html(cell, document.part.related_parts)
+                cells_html.append(f"<td>{cell_html}</td>")
+            rows_html.append(f"<tr>{''.join(cells_html)}</tr>")
+        table_html = f"<table class='tpl-table'>{''.join(rows_html)}</table>"
 
-        <div class="rp-section">
-          <div class="rp-section-title">Photos ({len(image_bytes or [])})</div>
-          <div class="rp-photos">{photos_html}</div>
-        </div>
-
-        <div class="rp-sign-grid">
-          <div class="rp-sign-card">
-            {consultant_sig_block}
-            <div class="rp-label">{_preview_text(sign_info.get("Consultant_Name", ""))}</div>
-            <div>{_preview_text(sign_info.get("Consultant_Title", ""))}</div>
-          </div>
-          <div class="rp-sign-card">
-            {contractor_sig_block}
-            <div class="rp-label">{_preview_text(sign_info.get("Contractor_Name", ""))}</div>
-            <div>{_preview_text(sign_info.get("Contractor_Title", ""))}</div>
+    return textwrap.dedent(
+        f"""
+        <style>
+          .tpl-shell {{
+            border: 1px solid #d0d5dd;
+            border-radius: 10px;
+            background: #f5f7fa;
+            padding: 12px;
+            overflow-x: auto;
+          }}
+          .tpl-page {{
+            width: min(210mm, 100%);
+            min-height: 297mm;
+            margin: 0 auto;
+            box-sizing: border-box;
+            padding: 12mm;
+            background: #fff;
+            border: 1px solid #c3cad4;
+            box-shadow: 0 8px 24px rgba(16, 24, 40, 0.15);
+            color: #111827;
+            font-family: "Times New Roman", Georgia, serif;
+            font-size: 11pt;
+            line-height: 1.35;
+          }}
+          .tpl-page p {{ margin: 0 0 6px 0; }}
+          .tpl-table {{
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            margin-top: 8px;
+          }}
+          .tpl-table td {{
+            border: 1px solid #b9c1cc;
+            padding: 4px 5px;
+            vertical-align: top;
+            font-size: 10.5pt;
+            word-break: break-word;
+          }}
+          .tpl-image {{
+            display: block;
+            max-width: 100%;
+            height: auto;
+            margin: 3px 0;
+          }}
+          .tpl-muted {{ color: #667085; font-style: italic; }}
+          @media (max-width: 900px) {{
+            .tpl-page {{
+              width: 100%;
+              min-height: auto;
+              padding: 14px;
+            }}
+          }}
+        </style>
+        <div class="tpl-shell">
+          <div class="tpl-page">
+            {paragraphs_html}
+            {table_html}
           </div>
         </div>
-      </div>
-    </div>
-    """
+        """
+    ).strip()
+
+
+def _build_single_report_docx(
+    row: list[str],
+    uploaded_images: dict[tuple[str, str], list[bytes]],
+    discipline: str,
+    img_width_mm: int,
+    img_height_mm: int,
+    spacing_mm: int,
+    add_border: bool,
+) -> bytes:
+    """Render one report row to DOCX bytes via the same template pipeline."""
+    row_padded = (row + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)]
+    key = (row_padded[1].strip(), row_padded[0].strip())
+
+    single_map: dict[tuple[str, str], list[bytes]] = {}
+    if key in uploaded_images:
+        single_map[key] = uploaded_images[key]
+
+    zip_bytes = generate_reports(
+        [row_padded],
+        single_map,
+        discipline,
+        img_width_mm,
+        img_height_mm,
+        spacing_mm,
+        img_per_row=2,
+        add_border=add_border,
+    )
+
+    try:
+        with zipfile.ZipFile(BytesIO(zip_bytes), "r") as zf:
+            docx_names = [name for name in zf.namelist() if name.lower().endswith(".docx")]
+            if not docx_names:
+                return b""
+            return zf.read(docx_names[0])
+    except (zipfile.BadZipFile, KeyError):
+        return b""
 
 
 def run_app():
@@ -546,7 +491,9 @@ def run_app():
         "Word-style A4 preview of a selected report row before download."
     )
 
-    if review_rows:
+    markdown_available = callable(getattr(st, "markdown", None))
+
+    if review_rows and markdown_available:
         preview_options = list(range(len(review_rows)))
         preview_idx = _safe_selectbox(
             "Choose report to preview",
@@ -559,19 +506,25 @@ def run_app():
             preview_idx = 0
 
         preview_row = review_rows[int(preview_idx)]
-        preview_key = (preview_row[1].strip(), preview_row[0].strip())
-        preview_images = st.session_state.get("images", {}).get(preview_key, [])
-
-        _safe_markdown(
-            _word_style_preview_html(
-                preview_row,
-                discipline,
-                preview_images,
-                img_width_mm,
-                img_height_mm,
-            ),
-            unsafe_allow_html=True,
+        preview_docx = _build_single_report_docx(
+            preview_row,
+            st.session_state.get("images", {}),
+            discipline,
+            img_width_mm,
+            img_height_mm,
+            spacing_mm,
+            add_border,
         )
+
+        if preview_docx:
+            _safe_markdown(
+                _render_template_preview_html(preview_docx),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.warning("Unable to render template preview for the selected row.")
+    elif review_rows:
+        st.info("Template preview is available in the full Streamlit UI.")
     else:
         st.info("No rows available for template preview.")
 
