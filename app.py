@@ -164,10 +164,29 @@ def _docx_cell_html(cell, related_parts) -> str:
 
 
 def _render_template_preview_html(docx_bytes: bytes) -> str:
-    """Build an A4 preview using the generated DOCX structure (template-based)."""
+    """Build a template-size preview using generated DOCX structure and section sizes."""
     from docx import Document
+    from docx.shared import Mm
 
     document = Document(BytesIO(docx_bytes))
+
+    emu_per_mm = Mm(1).emu
+    section = document.sections[0] if document.sections else None
+
+    def emu_to_mm(value, default: float) -> float:
+        try:
+            if value is None:
+                return default
+            return float(value) / float(emu_per_mm)
+        except Exception:
+            return default
+
+    page_w_mm = emu_to_mm(getattr(section, "page_width", None), 210.0)
+    page_h_mm = emu_to_mm(getattr(section, "page_height", None), 297.0)
+    margin_left_mm = emu_to_mm(getattr(section, "left_margin", None), 20.0)
+    margin_right_mm = emu_to_mm(getattr(section, "right_margin", None), 20.0)
+    margin_top_mm = emu_to_mm(getattr(section, "top_margin", None), 20.0)
+    margin_bottom_mm = emu_to_mm(getattr(section, "bottom_margin", None), 20.0)
 
     para_html_parts = []
     for para in document.paragraphs:
@@ -199,11 +218,11 @@ def _render_template_preview_html(docx_bytes: bytes) -> str:
             overflow-x: auto;
           }}
           .tpl-page {{
-            width: min(210mm, 100%);
-            min-height: 297mm;
+            width: min({page_w_mm:.2f}mm, 100%);
+            min-height: {page_h_mm:.2f}mm;
             margin: 0 auto;
             box-sizing: border-box;
-            padding: 12mm;
+            padding: {margin_top_mm:.2f}mm {margin_right_mm:.2f}mm {margin_bottom_mm:.2f}mm {margin_left_mm:.2f}mm;
             background: #fff;
             border: 1px solid #c3cad4;
             box-shadow: 0 8px 24px rgba(16, 24, 40, 0.15);
@@ -488,7 +507,7 @@ def run_app():
 
     st.subheader("Template-Size Report Preview")
     _safe_caption(
-        "Word-style A4 preview of a selected report row before download."
+        "Template-size preview from the actual generated report document (same page size and margins as template)."
     )
 
     markdown_available = callable(getattr(st, "markdown", None))
