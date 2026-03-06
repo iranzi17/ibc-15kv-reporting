@@ -27,25 +27,28 @@ def set_background(image_path: str, overlay_opacity: float = 0.55):
 # Store and retrieve the current user's role (default to Viewer)
 
 
-# ---- Styled header: WorkWatch — Site Intelligence · IRANZI ----
+# ---- Styled header: WorkWatch - Site Intelligence - IRANZI ----
 
 
-def render_workwatch_header():
-    """
-    Minimal header for a clean interface.
-    """
+def render_workwatch_header(
+    author: str = "IRANZI",
+    brand: str = "WorkWatch",
+    subtitle: str = "Site Intelligence",
+    logo_path: Optional[str] = None,
+    tagline: str = "",
+):
+    """Render a compact header with optional subtitle text."""
     st.header("Site Weekly Report Generator")
-
-render_workwatch_header()
+    if tagline:
+        st.caption(tagline)
 
 render_workwatch_header(
     author="IRANZI",
     brand="WorkWatch",
     subtitle="Site Intelligence",
-    logo_path="ibc_logo.png",          # or None to hide
+    logo_path="ibc_logo.png",  # or None to hide
     tagline="Field reports & weekly summaries",
 )
-
 # -----------------------------
 # Paths & small helpers
 # -----------------------------
@@ -59,7 +62,7 @@ DISCIPLINE_COL = 11
 
 def resolve_asset(name: Optional[str]) -> Optional[str]:
     """
-    Find an asset (e.g., signature image) whether it’s in ./ or ./signatures/,
+    Find an asset (e.g., signature image) whether it's in ./ or ./signatures/,
     with or without extension. Tries .png/.jpg/.jpeg/.webp.
     Returns an absolute path or None.
     """
@@ -391,6 +394,59 @@ SIGNATORIES = {
     },
 }
 
+REPORT_COLUMNS = [
+    "Date",
+    "Site_Name",
+    "District",
+    "Work",
+    "Human_Resources",
+    "Supply",
+    "Work_Executed",
+    "Comment_on_work",
+    "Another_Work_Executed",
+    "Comment_on_HSE",
+    "Consultant_Recommandation",
+]
+
+CABIN_ACTIVITY_PATTERN = re.compile(r"\bcabin\b", re.IGNORECASE)
+CABIN_CONTRACTOR_OVERRIDE = {
+    "Contractor_Name": "Rutarindwa Olivier",
+    "Contractor_Title": "Civil Engineer",
+    "Contractor_Signature": "rutalindwa_olivier",
+}
+
+
+def normalize_text_cell(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def row_mentions_cabin(*fields: object) -> bool:
+    return any(CABIN_ACTIVITY_PATTERN.search(normalize_text_cell(field)) for field in fields)
+
+
+def signatories_for_daily_row(
+    discipline: str,
+    work: str,
+    work_executed: str,
+    another_work_executed: str,
+    comment_on_work: str,
+) -> dict[str, str]:
+    sign_info = dict(SIGNATORIES.get(discipline, {}))
+    if row_mentions_cabin(work, work_executed, another_work_executed, comment_on_work):
+        sign_info.update(CABIN_CONTRACTOR_OVERRIDE)
+    return sign_info
+
+
+def dataframe_rows_to_report_rows(df: pd.DataFrame) -> list[list[str]]:
+    if df.empty:
+        return []
+    normalized = df.reindex(columns=REPORT_COLUMNS).fillna("")
+    return [[normalize_text_cell(cell) for cell in row] for row in normalized.values.tolist()]
+
 # -----------------------------
 # Google Sheets & offline cache
 # -----------------------------
@@ -466,7 +522,7 @@ def get_unique_sites_and_dates(rows: list[list[str]]):
 # -----------------------------
 # UI
 # -----------------------------
-st.title("📑 Site Daily Report Generator (Pro)")
+st.title("Site Daily Report Generator (Pro)")
 
 cache = load_offline_cache()
 if cache and cache.get("rows"):
@@ -494,12 +550,12 @@ sites, all_dates = get_unique_sites_and_dates(rows)
 
 with st.sidebar:
     offline_enabled = st.checkbox("Enable offline cache", value=False)
-    st.header("Step 0: Select Discipline")
+    st.header("Select Discipline")
     discipline = st.radio(
         "Choose discipline:", ["Civil", "Electrical"], index=0, key="discipline_radio"
     )
 
-    st.header("Step 1: Select Sites")
+    st.header("Select Sites")
     site_choices = ["All Sites"] + sites
     selected_sites = st.multiselect(
         "Choose sites:", site_choices, default=["All Sites"], key="sites_ms"
@@ -507,7 +563,7 @@ with st.sidebar:
     if "All Sites" in selected_sites or not selected_sites:
         selected_sites = sites
 
-    st.header("Step 2: Select Dates")
+    st.header("Select Dates")
     site_dates = sorted({row[0].strip() for row in rows if row[1].strip() in selected_sites})
     date_choices = ["All Dates"] + site_dates
     selected_dates = st.multiselect(
@@ -525,24 +581,45 @@ filtered_rows = [
 # (site, date) pairs for upload mapping
 site_date_pairs = sorted({(row[1].strip(), row[0].strip()) for row in filtered_rows})
 
-# Uploads mapping
+# Upload mappings
 uploaded_image_mapping: dict[tuple[str, str], list] = {}
+image_width_mm_mapping: dict[tuple[str, str], int] = {}
 
 # Preview
 st.subheader("Preview Reports to be Generated")
 show_dashboard = st.checkbox("Show Dashboard")
 df_preview = pd.DataFrame(
-    filtered_rows,
-    columns=[
-        "Date", "Site_Name", "District", "Work", "Human_Resources", "Supply",
-        "Work_Executed", "Comment_on_work", "Another_Work_Executed",
-        "Comment_on_HSE", "Consultant_Recommandation",
-    ],
+    [(row + [""] * len(REPORT_COLUMNS))[: len(REPORT_COLUMNS)] for row in filtered_rows],
+    columns=REPORT_COLUMNS,
 )
 st.dataframe(df_preview, use_container_width=True, hide_index=True)
 
+st.subheader("Review Before Download")
+st.caption(
+    "Edit report text before generation. Date and site are locked so uploaded images stay linked."
+)
+review_df = st.data_editor(
+    df_preview,
+    use_container_width=True,
+    hide_index=True,
+    disabled=["Date", "Site_Name"],
+    key="daily_report_review_editor",
+)
+review_rows = dataframe_rows_to_report_rows(review_df)
+
+cabin_report_count = sum(
+    1
+    for row in review_rows
+    if row_mentions_cabin(row[3], row[6], row[8], row[7])
+)
+if cabin_report_count:
+    st.info(
+        f"{cabin_report_count} report(s) mention cabin activities. "
+        "The contractor representative will be set to Rutarindwa Olivier (Civil Engineer)."
+    )
+
 if show_dashboard:
-    dash_df = df_preview.copy()
+    dash_df = review_df.copy()
     dash_df = dash_df[dash_df["Site_Name"].isin(selected_sites)]
     dash_df = dash_df[dash_df["Date"].isin(selected_dates)]
     if "Discipline" in dash_df.columns:
@@ -571,6 +648,22 @@ if site_date_pairs:
                 key=f"uploader_{site_name}_{date}",
             )
             uploaded_image_mapping[(site_name, date)] = imgs
+
+            image_width_mm = st.slider(
+                "Image width in report (mm)",
+                min_value=40,
+                max_value=140,
+                value=70,
+                key=f"img_width_mm_{site_name}_{date}",
+            )
+            image_width_mm_mapping[(site_name, date)] = image_width_mm
+
+            if imgs:
+                st.image(
+                    [img.getvalue() for img in imgs],
+                    caption=[img.name for img in imgs],
+                    width=240,
+                )
 else:
     st.info("No site/date pairs in current filter. Adjust filters to upload images.")
 
@@ -578,81 +671,102 @@ else:
 # -----------------------------
 # Generate reports
 # -----------------------------
-if st.button("🚀 Generate & Download All Reports"):
-    with st.spinner("Generating reports, please wait..."):
-        temp_dir = tempfile.mkdtemp()
-        zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+if st.button("Generate & Download All Reports"):
+    if not review_rows:
+        st.warning("No rows selected for generation.")
+    else:
+        with st.spinner("Generating reports, please wait..."):
+            temp_dir = tempfile.mkdtemp()
+            zip_buffer = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
 
-        with zipfile.ZipFile(zip_buffer, "w") as zipf:
-            for row in filtered_rows:
-                (
-                    date, site_name, district, work, human_resources, supply,
-                    work_executed, comment_on_work, another_work_executed,
-                    comment_on_hse, consultant_recommandation
-                ) = (row + [""] * 11)[:11]
+            with zipfile.ZipFile(zip_buffer, "w") as zipf:
+                for row in review_rows:
+                    (
+                        date,
+                        site_name,
+                        district,
+                        work,
+                        human_resources,
+                        supply,
+                        work_executed,
+                        comment_on_work,
+                        another_work_executed,
+                        comment_on_hse,
+                        consultant_recommandation,
+                    ) = (row + [""] * len(REPORT_COLUMNS))[: len(REPORT_COLUMNS)]
 
-                tpl = DocxTemplate(TEMPLATE_PATH)
+                    tpl = DocxTemplate(TEMPLATE_PATH)
 
-                # Images from uploader → put each photo in a subdocument paragraph
-                image_files = uploaded_image_mapping.get((site_name, date), []) or []
-                images_subdoc = tpl.new_subdoc()
-                for img_file in image_files:
-                    img_path = os.path.join(temp_dir, img_file.name)
-                    with open(img_path, "wb") as f:
-                        f.write(img_file.getbuffer())
-                    p = images_subdoc.add_paragraph()
-                    r = p.add_run()
-                    r.add_picture(img_path, width=Mm(70))
+                    # Images from uploader -> put each photo in a subdocument paragraph
+                    image_files = uploaded_image_mapping.get((site_name, date), []) or []
+                    image_width_mm = image_width_mm_mapping.get((site_name, date), 70)
+                    images_subdoc = tpl.new_subdoc()
+                    for img_file in image_files:
+                        img_path = os.path.join(temp_dir, img_file.name)
+                        with open(img_path, "wb") as f:
+                            f.write(img_file.getbuffer())
+                        p = images_subdoc.add_paragraph()
+                        r = p.add_run()
+                        r.add_picture(img_path, width=Mm(image_width_mm))
 
-                # Signatories (names/titles + signatures)
-                sign_info = SIGNATORIES.get(discipline, {})
-                cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
-                cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
-                cons_sig_img = InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
-                cont_sig_img = InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+                    # Signatories (names/titles + signatures)
+                    sign_info = signatories_for_daily_row(
+                        discipline,
+                        work,
+                        work_executed,
+                        another_work_executed,
+                        comment_on_work,
+                    )
+                    cons_sig_path = resolve_asset(sign_info.get("Consultant_Signature"))
+                    cont_sig_path = resolve_asset(sign_info.get("Contractor_Signature"))
+                    cons_sig_img = (
+                        InlineImage(tpl, cons_sig_path, width=Mm(30)) if cons_sig_path else ""
+                    )
+                    cont_sig_img = (
+                        InlineImage(tpl, cont_sig_path, width=Mm(30)) if cont_sig_path else ""
+                    )
 
-                # Context for DOCX
-                context = {
-                    "Site_Name": site_name or "",
-                    "Date": date or "",
-                    "District": district or "",
-                    "Work": work or "",
-                    "Human_Resources": human_resources or "",
-                    "Supply": supply or "",
-                    "Work_Executed": work_executed or "",
-                    "Comment_on_work": comment_on_work or "",
-                    "Another_Work_Executed": another_work_executed or "",
-                    "Comment_on_HSE": comment_on_hse or "",
-                    "Consultant_Recommandation": consultant_recommandation or "",
-                    "Images": images_subdoc,  # ← use subdocument, not RichText
-                    "Consultant_Name": sign_info.get("Consultant_Name", ""),
-                    "Consultant_Title": sign_info.get("Consultant_Title", ""),
-                    "Contractor_Name": sign_info.get("Contractor_Name", ""),
-                    "Contractor_Title": sign_info.get("Contractor_Title", ""),
-                    "Consultant_Signature": cons_sig_img,
-                    "Contractor_Signature": cont_sig_img,
-                }
+                    # Context for DOCX
+                    context = {
+                        "Site_Name": site_name or "",
+                        "Date": date or "",
+                        "District": district or "",
+                        "Work": work or "",
+                        "Human_Resources": human_resources or "",
+                        "Supply": supply or "",
+                        "Work_Executed": work_executed or "",
+                        "Comment_on_work": comment_on_work or "",
+                        "Another_Work_Executed": another_work_executed or "",
+                        "Comment_on_HSE": comment_on_hse or "",
+                        "Consultant_Recommandation": consultant_recommandation or "",
+                        "Images": images_subdoc,
+                        "Consultant_Name": sign_info.get("Consultant_Name", ""),
+                        "Consultant_Title": sign_info.get("Consultant_Title", ""),
+                        "Contractor_Name": sign_info.get("Contractor_Name", ""),
+                        "Contractor_Title": sign_info.get("Contractor_Title", ""),
+                        "Consultant_Signature": cons_sig_img,
+                        "Contractor_Signature": cont_sig_img,
+                    }
 
-                tpl.render(context)
+                    tpl.render(context)
 
-                # Filename pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
-                date_for_title = format_date_title(date)
-                out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
-                out_name = safe_filename(out_name)  # guard against illegal chars/length
-                out_path = os.path.join(temp_dir, out_name)
+                    # Filename pattern: {Site}_Day_Report_{dd.MM.YYYY}.docx
+                    date_for_title = format_date_title(date)
+                    out_name = f"{site_name}_Day_Report_{date_for_title}.docx"
+                    out_name = safe_filename(out_name)
+                    out_path = os.path.join(temp_dir, out_name)
 
-                tpl.save(out_path)
-                zipf.write(out_path, arcname=out_name)
+                    tpl.save(out_path)
+                    zipf.write(out_path, arcname=out_name)
 
-        zip_buffer.flush()
-        zip_buffer.seek(0)
-        st.download_button(
-            "⬇️ Download ZIP",
-            data=zip_buffer.read(),
-            file_name="daily_reports.zip",
-            mime="application/zip",
-        )
-
+            zip_buffer.flush()
+            zip_buffer.seek(0)
+            st.download_button(
+                "Download ZIP",
+                data=zip_buffer.read(),
+                file_name="daily_reports.zip",
+                mime="application/zip",
+            )
 st.info("**Tip:** If you don't upload images, reports will still be generated with all your data.")
 st.caption("Made for efficient, multi-site daily reporting. Feedback & customizations welcome!")
 
@@ -683,11 +797,14 @@ tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
 tpl.save(tmp.name)
 with open(tmp.name, "rb") as fh:
     st.download_button(
-        "⬇️ Download Weekly Report",
+        "Download Weekly Report",
         data=fh.read(),
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
+
+
+
 
 
 
