@@ -30,6 +30,12 @@ from ui_hero import render_hero
 
 st.set_page_config(page_title="WorkWatch - Site Intelligence", layout="wide")
 
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_API_KEY_SESSION_KEY = "openai_api_key"
+OPENAI_CHAT_MESSAGES_KEY = "openai_chat_messages"
+OPENAI_PREVIOUS_RESPONSE_ID_KEY = "openai_previous_response_id"
+OPENAI_MODEL_SESSION_KEY = "openai_model"
+
 
 def _safe_columns(*args, **kwargs):
     """Call st.columns falling back to positional-only call for stubs."""
@@ -101,6 +107,255 @@ def _safe_image(images, **kwargs) -> None:
     image_fn = getattr(st, "image", None)
     if callable(image_fn):
         image_fn(images, **kwargs)
+
+
+def _safe_text_input(label: str, value: str = "", **kwargs) -> str:
+    """Call st.text_input when available, falling back to the default value."""
+    text_input_fn = getattr(st, "text_input", None)
+    if callable(text_input_fn):
+        try:
+            return text_input_fn(label, value=value, **kwargs)
+        except TypeError:
+            return text_input_fn(label, value)
+    return value
+
+
+def _safe_write(value: object) -> None:
+    """Call st.write when available."""
+    write_fn = getattr(st, "write", None)
+    if callable(write_fn):
+        write_fn(value)
+
+
+def _safe_expander(label: str, *, expanded: bool = False):
+    """Return st.expander context or a nullcontext fallback."""
+    expander_fn = getattr(st, "expander", None)
+    if callable(expander_fn):
+        try:
+            return expander_fn(label, expanded=expanded)
+        except TypeError:
+            return expander_fn(label)
+    return nullcontext()
+
+
+def _safe_chat_message(role: str):
+    """Return st.chat_message context or a nullcontext fallback."""
+    chat_message_fn = getattr(st, "chat_message", None)
+    if callable(chat_message_fn):
+        return chat_message_fn(role)
+    return nullcontext()
+
+
+def _safe_chat_input(prompt: str, **kwargs) -> str | None:
+    """Return st.chat_input value or None when unavailable."""
+    chat_input_fn = getattr(st, "chat_input", None)
+    if callable(chat_input_fn):
+        try:
+            return chat_input_fn(prompt, **kwargs)
+        except TypeError:
+            return chat_input_fn(prompt)
+    return None
+
+
+def _safe_spinner(text: str):
+    """Return st.spinner context or a nullcontext fallback."""
+    spinner_fn = getattr(st, "spinner", None)
+    if callable(spinner_fn):
+        return spinner_fn(text)
+    return nullcontext()
+
+
+def _streamlit_secret(name: str, default: str = "") -> str:
+    """Read one Streamlit secret value without failing when secrets are unavailable."""
+    try:
+        secrets = getattr(st, "secrets", None)
+        if secrets is None:
+            return default
+        if hasattr(secrets, "get"):
+            value = secrets.get(name, default)
+        elif name in secrets:
+            value = secrets[name]
+        else:
+            value = default
+    except Exception:
+        return default
+
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def _load_openai_api_key() -> str:
+    """Return the active OpenAI API key from session, env, or Streamlit secrets."""
+    session_key = str(st.session_state.get(OPENAI_API_KEY_SESSION_KEY, "") or "").strip()
+    if session_key:
+        return session_key
+
+    env_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    return _streamlit_secret("OPENAI_API_KEY")
+
+
+def _default_openai_model() -> str:
+    """Return the preferred chat model, allowing env or secrets overrides."""
+    session_model = str(st.session_state.get(OPENAI_MODEL_SESSION_KEY, "") or "").strip()
+    if session_model:
+        return session_model
+
+    env_model = os.environ.get("OPENAI_MODEL", "").strip()
+    if env_model:
+        return env_model
+
+    secret_model = _streamlit_secret("OPENAI_MODEL")
+    if secret_model:
+        return secret_model
+
+    return DEFAULT_OPENAI_MODEL
+
+
+def _openai_sdk_ready() -> tuple[bool, str]:
+    """Check whether the OpenAI SDK can be imported."""
+    try:
+        from openai import OpenAI  # noqa: F401
+    except ImportError as exc:
+        return False, str(exc)
+    return True, ""
+
+
+def _extract_openai_output_text(response) -> str:
+    """Read the text output from an OpenAI Responses API object."""
+    text = str(getattr(response, "output_text", "") or "").strip()
+    if text:
+        return text
+
+    fragments: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            content_text = str(getattr(content, "text", "") or "").strip()
+            if content_text:
+                fragments.append(content_text)
+
+    return "\n".join(fragments).strip()
+
+
+def _request_openai_reply(prompt: str, *, api_key: str, model: str) -> tuple[str, str]:
+    """Send one chat turn to OpenAI and return (reply_text, response_id)."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    request_kwargs = {
+        "model": model,
+        "input": [{"role": "user", "content": prompt}],
+    }
+
+    previous_response_id = st.session_state.get(OPENAI_PREVIOUS_RESPONSE_ID_KEY)
+    if previous_response_id:
+        request_kwargs["previous_response_id"] = previous_response_id
+
+    response = client.responses.create(**request_kwargs)
+    reply_text = _extract_openai_output_text(response)
+    if not reply_text:
+        reply_text = "No text response was returned."
+
+    return reply_text, str(getattr(response, "id", "") or "")
+
+
+def _clear_openai_chat() -> None:
+    """Reset the chat transcript and response threading state."""
+    st.session_state[OPENAI_CHAT_MESSAGES_KEY] = []
+    st.session_state.pop(OPENAI_PREVIOUS_RESPONSE_ID_KEY, None)
+
+
+def _render_openai_chat_panel() -> None:
+    """Render the ChatGPT-style assistant UI for the Streamlit app."""
+    st.subheader("ChatGPT Assistant")
+    _safe_caption(
+        "This uses the OpenAI API from your app. It does not connect to your personal ChatGPT chat history."
+    )
+
+    with _safe_expander("Chat settings", expanded=False):
+        entered_key = _safe_text_input(
+            "OpenAI API key (session only)",
+            value="",
+            type="password",
+            key="openai_api_key_input",
+            placeholder="sk-...",
+        ).strip()
+        if entered_key:
+            st.session_state[OPENAI_API_KEY_SESSION_KEY] = entered_key
+
+        active_key = _load_openai_api_key()
+        key_source = "session input"
+        if not st.session_state.get(OPENAI_API_KEY_SESSION_KEY):
+            if os.environ.get("OPENAI_API_KEY", "").strip():
+                key_source = "environment variable"
+            elif _streamlit_secret("OPENAI_API_KEY"):
+                key_source = "Streamlit secrets"
+            else:
+                key_source = "not configured"
+
+        model_value = _safe_text_input(
+            "OpenAI model",
+            value=_default_openai_model(),
+            key="openai_model_input",
+            placeholder=DEFAULT_OPENAI_MODEL,
+        ).strip()
+        st.session_state[OPENAI_MODEL_SESSION_KEY] = model_value or DEFAULT_OPENAI_MODEL
+
+        clear_key_col, clear_chat_col = _safe_columns(2, gap="large")
+        with clear_key_col:
+            if st.button("Forget session API key"):
+                st.session_state.pop(OPENAI_API_KEY_SESSION_KEY, None)
+                st.session_state["openai_api_key_input"] = ""
+        with clear_chat_col:
+            if st.button("Clear ChatGPT history"):
+                _clear_openai_chat()
+
+        if active_key:
+            st.success(f"OpenAI key loaded from {key_source}.")
+        else:
+            st.info(
+                "Add OPENAI_API_KEY to .streamlit/secrets.toml or your environment, or paste it above for this browser session."
+            )
+
+    sdk_ready, sdk_error = _openai_sdk_ready()
+    if not sdk_ready:
+        st.warning(
+            "OpenAI SDK is not installed yet. Run `pip install -r requirements.txt` and reload the app. "
+            f"Detail: {sdk_error}"
+        )
+        return
+
+    messages = st.session_state.setdefault(OPENAI_CHAT_MESSAGES_KEY, [])
+    prompt = _safe_chat_input("Ask ChatGPT anything about your reports or field work.")
+
+    if prompt:
+        api_key = _load_openai_api_key()
+        if not api_key:
+            st.warning("OpenAI API key is required before you can start chatting.")
+        else:
+            model = _default_openai_model()
+            messages.append({"role": "user", "content": prompt})
+            try:
+                with _safe_spinner("Waiting for OpenAI..."):
+                    reply_text, response_id = _request_openai_reply(
+                        prompt,
+                        api_key=api_key,
+                        model=model,
+                    )
+            except Exception as exc:
+                messages.pop()
+                st.error(f"OpenAI request failed: {exc}")
+            else:
+                messages.append({"role": "assistant", "content": reply_text})
+                if response_id:
+                    st.session_state[OPENAI_PREVIOUS_RESPONSE_ID_KEY] = response_id
+
+    for message in messages:
+        with _safe_chat_message(str(message.get("role", "assistant"))):
+            _safe_write(message.get("content", ""))
 
 
 def _load_sheet_context():
@@ -558,6 +813,7 @@ def run_app():
     )
     _safe_markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
+    _render_openai_chat_panel()
 
     _safe_markdown(
         """

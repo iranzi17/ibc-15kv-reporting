@@ -1,4 +1,5 @@
 import app
+import types
 
 
 HEADERS = [
@@ -230,3 +231,20 @@ def test_run_app_generates_reports_when_button_clicked(monkeypatch):
     assert generated["rows"] == [sheet_rows[1]]
     assert st_stub.download_called is True
     assert not st_stub.text_area_calls
+
+
+def test_load_openai_api_key_prefers_session_env_then_secrets(monkeypatch):
+    st_stub = types.SimpleNamespace(
+        session_state={app.OPENAI_API_KEY_SESSION_KEY: "session-key"},
+        secrets={"OPENAI_API_KEY": "secret-key"},
+    )
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+
+    assert app._load_openai_api_key() == "session-key"
+
+    st_stub.session_state.clear()
+    assert app._load_openai_api_key() == "env-key"
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert app._load_openai_api_key() == "secret-key"

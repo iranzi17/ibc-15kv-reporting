@@ -20,6 +20,17 @@ The credentials are parsed with `json.loads(st.secrets["GOOGLE_CREDENTIALS"])`
 when the app starts. For backwards compatibility, an older
 `gcp_service_account` key is also accepted if present.
 
+To enable the in-app ChatGPT assistant, add your OpenAI key to the same file
+or export it as an environment variable:
+
+```
+OPENAI_API_KEY = "your-openai-api-key"
+OPENAI_MODEL = "gpt-4o-mini"
+```
+
+You can also paste the key into the ChatGPT settings panel inside the app for
+the current browser session only.
+
 ## Configuration
 
 Application settings can be supplied through environment variables or by
