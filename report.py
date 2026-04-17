@@ -10,11 +10,15 @@ from docxtpl import DocxTemplate, InlineImage
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from config import TEMPLATE_PATH
 
 BASE_DIR = Path(__file__).parent.resolve()
 EMU_PER_MM = Mm(1).emu
+JPEG_QUALITY = 92
+GALLERY_RENDER_DPI = 160
+RESAMPLE_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 SIGNATORIES = {
     "Civil": {
@@ -38,6 +42,9 @@ SIGNATORIES = {
 PLACEHOLDER_REPLACEMENTS = {
     "Reaction&amp;WayForword": "Reaction_and_WayForword",
 }
+
+EMPTY_GALLERY_MESSAGE = "No site photo was attached to the daily return."
+EXTRA_GALLERY_MESSAGE = "No additional site photo was attached."
 
 
 def signatories_for_row(
@@ -147,6 +154,173 @@ def _set_cell_margin(cell, side: str, value_mm: float) -> None:
     margin.set(qn("w:type"), "dxa")
 
 
+def _mm_to_pixels(mm_value: float, *, dpi: int = GALLERY_RENDER_DPI) -> int:
+    """Convert millimetres to pixels for pre-sizing gallery images."""
+
+    pixels = float(mm_value) * dpi / 25.4
+    return max(1, int(round(pixels)))
+
+
+def _gallery_slot_size_px(width_mm: float, height_mm: float | None) -> tuple[int, int]:
+    """Return a pixel size matching the selected physical gallery slot."""
+
+    safe_width_mm = max(1.0, float(width_mm))
+    safe_height_mm = max(1.0, float(height_mm or width_mm))
+    return _mm_to_pixels(safe_width_mm), _mm_to_pixels(safe_height_mm)
+
+
+def _load_gallery_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a readable system font for placeholder images."""
+
+    candidates = [
+        Path(r"C:\Windows\Fonts\arial.ttf"),
+        Path(r"C:\Windows\Fonts\calibri.ttf"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        Path("/Library/Fonts/Arial.ttf"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                return ImageFont.truetype(str(candidate), size=size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+
+def _wrap_text_by_pixels(
+    text: str,
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> str:
+    """Wrap placeholder text to a target pixel width."""
+
+    words = str(text or "").split()
+    if not words:
+        return ""
+
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        bbox = draw.textbbox((0, 0), candidate, font=font)
+        width = bbox[2] - bbox[0]
+        if width <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return "\n".join(lines)
+
+
+def _placeholder_gallery_image_bytes(size: tuple[int, int], message: str) -> bytes:
+    """Return a centered JPEG placeholder sized for the report gallery slot."""
+
+    width, height = size
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+
+    margin = max(20, min(width, height) // 30)
+    border_width = max(2, min(width, height) // 250)
+    draw.rectangle(
+        (margin, margin, width - margin, height - margin),
+        outline=(218, 218, 218),
+        width=border_width,
+    )
+
+    font_size = max(24, min(width, height) // 20)
+    font = _load_gallery_font(font_size)
+    wrapped = _wrap_text_by_pixels(message, draw, font, max(1, width - (margin * 4)))
+    bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, spacing=8, align="center")
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    x = (width - text_width) / 2
+    y = (height - text_height) / 2
+
+    draw.multiline_text(
+        (x, y),
+        wrapped,
+        font=font,
+        fill=(120, 120, 120),
+        spacing=8,
+        align="center",
+    )
+
+    buffer = BytesIO()
+    image.save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    return buffer.getvalue()
+
+
+def _prepared_gallery_image_bytes(
+    image_bytes: bytes | None,
+    *,
+    size: tuple[int, int],
+    missing_message: str,
+    failure_message: str,
+) -> bytes:
+    """Return a normalized gallery JPEG or a placeholder when the input is unusable."""
+
+    if not image_bytes:
+        return _placeholder_gallery_image_bytes(size, missing_message)
+
+    try:
+        with Image.open(BytesIO(image_bytes)) as img:
+            image = ImageOps.exif_transpose(img).convert("RGB")
+            fitted = ImageOps.fit(
+                image,
+                size,
+                method=RESAMPLE_LANCZOS,
+                centering=(0.5, 0.5),
+            )
+    except Exception:
+        return _placeholder_gallery_image_bytes(size, failure_message)
+
+    buffer = BytesIO()
+    fitted.save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    return buffer.getvalue()
+
+
+def _gallery_placeholder_message(index: int) -> str:
+    """Return a user-facing message for a missing gallery photo slot."""
+
+    if index <= 1:
+        return EMPTY_GALLERY_MESSAGE
+    return EXTRA_GALLERY_MESSAGE
+
+
+def _prepared_gallery_items(
+    image_bytes_list: List[bytes],
+    *,
+    slot_size_px: tuple[int, int],
+    images_per_row: int,
+    show_placeholders: bool,
+) -> List[bytes]:
+    """Normalize gallery images and optionally fill missing slots with placeholders."""
+
+    prepared_inputs: list[bytes | None] = list(image_bytes_list or [])
+    if show_placeholders:
+        if prepared_inputs:
+            remainder = len(prepared_inputs) % max(1, images_per_row)
+            if remainder:
+                prepared_inputs.extend([None] * (images_per_row - remainder))
+        else:
+            prepared_inputs = [None] * max(1, images_per_row)
+
+    prepared_outputs: list[bytes] = []
+    for index, item in enumerate(prepared_inputs, start=1):
+        prepared_outputs.append(
+            _prepared_gallery_image_bytes(
+                item,
+                size=slot_size_px,
+                missing_message=_gallery_placeholder_message(index),
+                failure_message=f"Unable to process site photo {index}.",
+            )
+        )
+
+    return prepared_outputs
+
+
 def _apply_cell_spacing(cell, spacing_mm: float, column_index: int, total_columns: int) -> tuple[float, float]:
     """Apply asymmetric margins that create an even gap between images."""
 
@@ -174,6 +348,7 @@ def generate_reports(
     spacing_mm: int,
     img_per_row: int = 2,
     add_border: bool = False,
+    show_photo_placeholders: bool = True,
     template_path: str = TEMPLATE_PATH,
 ) -> bytes:
     """Create a ZIP archive of rendered DOCX reports."""
@@ -186,6 +361,7 @@ def generate_reports(
     table_columns = max(2, images_per_row)
     content_width_mm = max(1.0, float(img_width_mm))
     content_height_mm = float(img_height_mm) if img_height_mm else None
+    gallery_slot_size_px = _gallery_slot_size_px(content_width_mm, content_height_mm)
 
     try:
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
@@ -228,14 +404,20 @@ def generate_reports(
                     )
 
                 image_bytes = uploaded_image_mapping.get((site_name, date), []) or []
+                prepared_gallery_items = _prepared_gallery_items(
+                    image_bytes,
+                    slot_size_px=gallery_slot_size_px,
+                    images_per_row=images_per_row,
+                    show_placeholders=show_photo_placeholders,
+                )
                 images_subdoc = tpl.new_subdoc()
                 row_cells = []
-                for idx, data in enumerate(image_bytes):
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".img") as tmp_img:
+                for idx, data in enumerate(prepared_gallery_items):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_img:
                         tmp_img.write(data)
                         tmp_img.flush()
                         row_cells.append(tmp_img.name)
-                    if (idx + 1) % images_per_row == 0 or idx == len(image_bytes) - 1:
+                    if (idx + 1) % images_per_row == 0 or idx == len(prepared_gallery_items) - 1:
                         table = images_subdoc.add_table(rows=1, cols=table_columns)
                         table.autofit = False
                         for col_idx in range(table_columns):
@@ -281,7 +463,7 @@ def generate_reports(
                             except IndexError:
                                 pass
                         row_cells = []
-                        if (idx + 1) % (images_per_row * 2) == 0 and idx != len(image_bytes) - 1:
+                        if (idx + 1) % (images_per_row * 2) == 0 and idx != len(prepared_gallery_items) - 1:
                             images_subdoc.add_page_break()
 
                 sign_info = signatories_for_row(

@@ -1968,12 +1968,19 @@ def run_app():
     img_height_mm = st.sidebar.slider(
         "Image height (mm)", min_value=50, max_value=250, value=148, step=5
     )
+    show_photo_placeholders = st.sidebar.checkbox(
+        "Show placeholder when photos are missing",
+        value=True,
+    )
     st.sidebar.caption(
-        "Images default to 185 mm x 148 mm each, arranged two per row with a 5 mm gap."
+        "Photos are auto-oriented, center-cropped, and normalized to the selected slot size before insertion."
     )
     add_border = st.sidebar.checkbox("Add border to images", value=False)
     spacing_mm = st.sidebar.slider(
         "Gap between images (mm)", min_value=0, max_value=20, value=5, step=1
+    )
+    st.sidebar.caption(
+        "Gallery placeholders keep the report layout consistent when some site photos are missing or unreadable."
     )
 
     data_rows, sites, data_error = _load_sheet_context()
@@ -2122,6 +2129,7 @@ def run_app():
             spacing_mm,
             img_per_row=2,
             add_border=add_border,
+            show_photo_placeholders=show_photo_placeholders,
         )
         st.download_button("Download ZIP", zip_bytes, "reports.zip")
 

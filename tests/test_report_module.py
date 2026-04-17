@@ -18,6 +18,7 @@ def _png_bytes(width: int, height: int, color: tuple[int, int, int] = (255, 0, 0
 
 
 SQUARE_PNG = _png_bytes(200, 200)
+LANDSCAPE_PNG = _png_bytes(640, 320)
 
 
 def test_safe_filename():
@@ -74,6 +75,72 @@ def test_generate_reports_unique_docx_names_for_duplicates():
         "report.docx",
         "report_2.docx",
     ]
+
+
+def test_prepared_gallery_image_bytes_resizes_to_slot():
+    prepared = report._prepared_gallery_image_bytes(
+        LANDSCAPE_PNG,
+        size=(320, 180),
+        missing_message="missing",
+        failure_message="failure",
+    )
+
+    with Image.open(BytesIO(prepared)) as image:
+        assert image.size == (320, 180)
+
+
+def test_prepared_gallery_image_bytes_falls_back_to_placeholder_for_invalid_data():
+    prepared = report._prepared_gallery_image_bytes(
+        b"not-a-real-image",
+        size=(240, 160),
+        missing_message="missing",
+        failure_message="failure",
+    )
+
+    with Image.open(BytesIO(prepared)) as image:
+        assert image.size == (240, 160)
+
+
+def test_generate_reports_adds_placeholder_images_when_enabled():
+    rows = [_empty_row("Site A", "2025-08-06")]
+    data = report.generate_reports(
+        rows,
+        {},
+        "Civil",
+        70,
+        60,
+        2,
+        img_per_row=2,
+        add_border=False,
+        show_photo_placeholders=True,
+    )
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        doc_bytes = zf.read(zf.namelist()[0])
+
+    document = Document(BytesIO(doc_bytes))
+
+    assert len(document.inline_shapes) > 2
+
+
+def test_generate_reports_skips_placeholder_images_when_disabled():
+    rows = [_empty_row("Site A", "2025-08-06")]
+    data = report.generate_reports(
+        rows,
+        {},
+        "Civil",
+        70,
+        60,
+        2,
+        img_per_row=2,
+        add_border=False,
+        show_photo_placeholders=False,
+    )
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        doc_bytes = zf.read(zf.namelist()[0])
+
+    document = Document(BytesIO(doc_bytes))
+
+    assert len(document.inline_shapes) == 2
 
 
 def test_generate_reports_respects_width_and_spacing():
