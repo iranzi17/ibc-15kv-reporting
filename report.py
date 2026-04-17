@@ -19,6 +19,10 @@ EMU_PER_MM = Mm(1).emu
 JPEG_QUALITY = 92
 GALLERY_RENDER_DPI = 160
 RESAMPLE_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+TOP_SLOT_ASPECT_RATIO = 900 / 1150
+BOTTOM_SLOT_ASPECT_RATIO = 1600 / 1060
+LANDSCAPE_ASPECT_THRESHOLD = 1.05
+PORTRAIT_ASPECT_THRESHOLD = 0.95
 
 SIGNATORIES = {
     "Civil": {
@@ -45,6 +49,7 @@ PLACEHOLDER_REPLACEMENTS = {
 
 EMPTY_GALLERY_MESSAGE = "No site photo was attached to the daily return."
 EXTRA_GALLERY_MESSAGE = "No additional site photo was attached."
+WIDE_GALLERY_MESSAGE = "No wide site photo was attached to the daily return."
 
 
 def signatories_for_row(
@@ -289,36 +294,296 @@ def _gallery_placeholder_message(index: int) -> str:
     return EXTRA_GALLERY_MESSAGE
 
 
-def _prepared_gallery_items(
-    image_bytes_list: List[bytes],
+def _image_size_from_bytes(image_bytes: bytes | None) -> tuple[int, int] | None:
+    """Return image dimensions from raw bytes, or None when unreadable."""
+
+    if not image_bytes:
+        return None
+    try:
+        with Image.open(BytesIO(image_bytes)) as img:
+            width, height = img.size
+    except Exception:
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _image_aspect_ratio(image_bytes: bytes | None) -> float | None:
+    """Return width/height for an image, or None when unreadable."""
+
+    size = _image_size_from_bytes(image_bytes)
+    if not size:
+        return None
+    width, height = size
+    return width / height
+
+
+def _gallery_layout_geometry(
+    gallery_width_mm: float,
+    wide_photo_height_mm: float | None,
+    spacing_mm: float,
+) -> dict[str, int]:
+    """Return pixel geometry for the editorial gallery layout."""
+
+    total_width_px = _mm_to_pixels(max(1.0, float(gallery_width_mm)))
+    gap_px = _mm_to_pixels(max(0.0, float(spacing_mm)))
+    top_slot_width_px = max(1, (total_width_px - gap_px) // 2)
+    top_slot_height_px = max(1, int(round(top_slot_width_px / TOP_SLOT_ASPECT_RATIO)))
+
+    if wide_photo_height_mm:
+        bottom_slot_height_px = _mm_to_pixels(max(1.0, float(wide_photo_height_mm)))
+    else:
+        bottom_slot_height_px = max(1, int(round(total_width_px / BOTTOM_SLOT_ASPECT_RATIO)))
+
+    return {
+        "total_width_px": total_width_px,
+        "gap_px": gap_px,
+        "top_slot_width_px": top_slot_width_px,
+        "top_slot_height_px": top_slot_height_px,
+        "bottom_slot_height_px": bottom_slot_height_px,
+    }
+
+
+def _gallery_slot_boxes(geometry: dict[str, int]) -> dict[str, tuple[int, int, int, int]]:
+    """Return slot rectangles as (left, top, width, height)."""
+
+    top_width = geometry["top_slot_width_px"]
+    top_height = geometry["top_slot_height_px"]
+    total_width = geometry["total_width_px"]
+    gap_px = geometry["gap_px"]
+    bottom_height = geometry["bottom_slot_height_px"]
+
+    return {
+        "top_left": (0, 0, top_width, top_height),
+        "top_right": (top_width + gap_px, 0, top_width, top_height),
+        "bottom": (0, top_height + gap_px, total_width, bottom_height),
+        "wide": (0, 0, total_width, bottom_height),
+    }
+
+
+def _gallery_page_groups(image_bytes_list: List[bytes], *, max_per_page: int = 3) -> List[List[bytes]]:
+    """Split uploaded site photos into fixed-size gallery pages."""
+
+    images = list(image_bytes_list or [])
+    return [images[index : index + max_per_page] for index in range(0, len(images), max_per_page)]
+
+
+def _draw_gallery_border(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+) -> None:
+    """Draw a subtle slot border around one gallery image."""
+
+    left, top, width, height = box
+    border_width = max(2, min(width, height) // 250)
+    draw.rectangle(
+        (left, top, left + width - 1, top + height - 1),
+        outline=(218, 218, 218),
+        width=border_width,
+    )
+
+
+def _paste_gallery_slot(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
     *,
-    slot_size_px: tuple[int, int],
-    images_per_row: int,
-    show_placeholders: bool,
-) -> List[bytes]:
-    """Normalize gallery images and optionally fill missing slots with placeholders."""
+    image_bytes: bytes | None,
+    box: tuple[int, int, int, int],
+    missing_message: str,
+    failure_message: str,
+    add_border: bool,
+    use_placeholder: bool,
+) -> None:
+    """Paste one prepared gallery slot into the composed page canvas."""
 
-    prepared_inputs: list[bytes | None] = list(image_bytes_list or [])
-    if show_placeholders:
-        if prepared_inputs:
-            remainder = len(prepared_inputs) % max(1, images_per_row)
-            if remainder:
-                prepared_inputs.extend([None] * (images_per_row - remainder))
-        else:
-            prepared_inputs = [None] * max(1, images_per_row)
+    if image_bytes is None and not use_placeholder:
+        return
 
-    prepared_outputs: list[bytes] = []
-    for index, item in enumerate(prepared_inputs, start=1):
-        prepared_outputs.append(
-            _prepared_gallery_image_bytes(
-                item,
-                size=slot_size_px,
-                missing_message=_gallery_placeholder_message(index),
-                failure_message=f"Unable to process site photo {index}.",
-            )
+    left, top, width, height = box
+    slot_bytes = _prepared_gallery_image_bytes(
+        image_bytes,
+        size=(width, height),
+        missing_message=missing_message,
+        failure_message=failure_message,
+    )
+    with Image.open(BytesIO(slot_bytes)) as slot_image:
+        canvas.paste(slot_image.convert("RGB"), (left, top))
+
+    if add_border:
+        _draw_gallery_border(draw, box)
+
+
+def _gallery_layout_name(page_images: List[bytes]) -> str:
+    """Choose the editorial layout for one gallery page."""
+
+    count = len(page_images)
+    if count <= 0:
+        return "empty"
+    if count >= 3:
+        return "two_top_one_bottom"
+
+    first_aspect = _image_aspect_ratio(page_images[0])
+    second_aspect = _image_aspect_ratio(page_images[1]) if count > 1 else None
+
+    if count == 2:
+        if (
+            first_aspect is not None
+            and second_aspect is not None
+            and first_aspect <= PORTRAIT_ASPECT_THRESHOLD
+            and second_aspect >= LANDSCAPE_ASPECT_THRESHOLD
+        ):
+            return "portrait_plus_wide"
+        return "two_top"
+
+    if first_aspect is not None and first_aspect <= PORTRAIT_ASPECT_THRESHOLD:
+        return "single_portrait"
+    return "single_wide"
+
+
+def _compose_gallery_page_bytes(
+    page_images: List[bytes],
+    *,
+    gallery_width_mm: float,
+    wide_photo_height_mm: float | None,
+    spacing_mm: float,
+    add_border: bool,
+    show_photo_placeholders: bool,
+) -> bytes | None:
+    """Compose one report gallery page as a single JPEG image."""
+
+    layout_name = _gallery_layout_name(page_images)
+    if layout_name == "empty" and not show_photo_placeholders:
+        return None
+
+    geometry = _gallery_layout_geometry(gallery_width_mm, wide_photo_height_mm, spacing_mm)
+    boxes = _gallery_slot_boxes(geometry)
+    total_width_px = geometry["total_width_px"]
+    gap_px = geometry["gap_px"]
+    top_height_px = geometry["top_slot_height_px"]
+    bottom_height_px = geometry["bottom_slot_height_px"]
+
+    if layout_name in {"two_top_one_bottom", "portrait_plus_wide"}:
+        canvas_height_px = top_height_px + gap_px + bottom_height_px
+    elif layout_name == "two_top":
+        canvas_height_px = top_height_px
+    else:
+        canvas_height_px = bottom_height_px if layout_name == "single_wide" else top_height_px
+
+    canvas = Image.new("RGB", (total_width_px, canvas_height_px), "white")
+    draw = ImageDraw.Draw(canvas)
+
+    if layout_name == "empty":
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=None,
+            box=boxes["wide"],
+            missing_message=EMPTY_GALLERY_MESSAGE,
+            failure_message="Unable to prepare the gallery placeholder.",
+            add_border=add_border,
+            use_placeholder=True,
+        )
+    elif layout_name == "two_top_one_bottom":
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[0],
+            box=boxes["top_left"],
+            missing_message=_gallery_placeholder_message(1),
+            failure_message="Unable to process site photo 1.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[1],
+            box=boxes["top_right"],
+            missing_message=_gallery_placeholder_message(2),
+            failure_message="Unable to process site photo 2.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[2],
+            box=boxes["bottom"],
+            missing_message=WIDE_GALLERY_MESSAGE,
+            failure_message="Unable to process site photo 3.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+    elif layout_name == "portrait_plus_wide":
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[0],
+            box=boxes["top_left"],
+            missing_message=_gallery_placeholder_message(1),
+            failure_message="Unable to process site photo 1.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[1],
+            box=boxes["bottom"],
+            missing_message=WIDE_GALLERY_MESSAGE,
+            failure_message="Unable to process site photo 2.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+    elif layout_name == "two_top":
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[0],
+            box=boxes["top_left"],
+            missing_message=_gallery_placeholder_message(1),
+            failure_message="Unable to process site photo 1.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[1],
+            box=boxes["top_right"],
+            missing_message=_gallery_placeholder_message(2),
+            failure_message="Unable to process site photo 2.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+    elif layout_name == "single_portrait":
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[0],
+            box=boxes["top_left"],
+            missing_message=_gallery_placeholder_message(1),
+            failure_message="Unable to process site photo 1.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
+        )
+    else:
+        _paste_gallery_slot(
+            canvas,
+            draw,
+            image_bytes=page_images[0],
+            box=boxes["wide"],
+            missing_message=EMPTY_GALLERY_MESSAGE,
+            failure_message="Unable to process site photo 1.",
+            add_border=add_border,
+            use_placeholder=show_photo_placeholders,
         )
 
-    return prepared_outputs
+    buffer = BytesIO()
+    canvas.save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    return buffer.getvalue()
 
 
 def _apply_cell_spacing(cell, spacing_mm: float, column_index: int, total_columns: int) -> tuple[float, float]:
@@ -354,14 +619,8 @@ def generate_reports(
     """Create a ZIP archive of rendered DOCX reports."""
     zip_buffer = BytesIO()
     sanitized_template = _create_sanitized_template_copy(template_path)
-    try:
-        images_per_row = max(1, int(img_per_row))
-    except (TypeError, ValueError):
-        images_per_row = 1
-    table_columns = max(2, images_per_row)
-    content_width_mm = max(1.0, float(img_width_mm))
-    content_height_mm = float(img_height_mm) if img_height_mm else None
-    gallery_slot_size_px = _gallery_slot_size_px(content_width_mm, content_height_mm)
+    gallery_width_mm = max(1.0, float(img_width_mm))
+    wide_photo_height_mm = float(img_height_mm) if img_height_mm else None
 
     try:
         with zipfile.ZipFile(zip_buffer, "w") as zipf:
@@ -404,67 +663,38 @@ def generate_reports(
                     )
 
                 image_bytes = uploaded_image_mapping.get((site_name, date), []) or []
-                prepared_gallery_items = _prepared_gallery_items(
-                    image_bytes,
-                    slot_size_px=gallery_slot_size_px,
-                    images_per_row=images_per_row,
-                    show_placeholders=show_photo_placeholders,
-                )
+                gallery_groups = _gallery_page_groups(image_bytes)
+                if not gallery_groups and show_photo_placeholders:
+                    gallery_groups = [[]]
+
                 images_subdoc = tpl.new_subdoc()
-                row_cells = []
-                for idx, data in enumerate(prepared_gallery_items):
+                for index, gallery_group in enumerate(gallery_groups):
+                    gallery_page_bytes = _compose_gallery_page_bytes(
+                        gallery_group,
+                        gallery_width_mm=gallery_width_mm,
+                        wide_photo_height_mm=wide_photo_height_mm,
+                        spacing_mm=spacing_mm,
+                        add_border=add_border,
+                        show_photo_placeholders=show_photo_placeholders,
+                    )
+                    if not gallery_page_bytes:
+                        continue
+
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_img:
-                        tmp_img.write(data)
+                        tmp_img.write(gallery_page_bytes)
                         tmp_img.flush()
-                        row_cells.append(tmp_img.name)
-                    if (idx + 1) % images_per_row == 0 or idx == len(prepared_gallery_items) - 1:
-                        table = images_subdoc.add_table(rows=1, cols=table_columns)
-                        table.autofit = False
-                        for col_idx in range(table_columns):
-                            cell = table.rows[0].cells[col_idx]
-                            left_margin, right_margin = _apply_cell_spacing(
-                                cell, spacing_mm, col_idx, table_columns
-                            )
+                        gallery_path = tmp_img.name
 
-                            if col_idx < len(row_cells):
-                                img_path = row_cells[col_idx]
-                                run = cell.paragraphs[0].add_run()
-                                width_emu = int(content_width_mm * EMU_PER_MM)
-                                if content_height_mm:
-                                    height_emu = int(max(1.0, content_height_mm) * EMU_PER_MM)
-                                    run.add_picture(
-                                        img_path, width=width_emu, height=height_emu
-                                    )
-                                else:
-                                    run.add_picture(img_path, width=width_emu)
+                    paragraph = images_subdoc.add_paragraph()
+                    paragraph.alignment = 1
+                    paragraph.add_run().add_picture(gallery_path, width=Mm(gallery_width_mm))
+                    try:
+                        os.remove(gallery_path)
+                    except OSError:
+                        pass
 
-                                if add_border:
-                                    from docx.oxml import parse_xml
-
-                                    borders_xml = """
-                                    <w:tcBorders xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
-                                        <w:top w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                        <w:left w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                        <w:bottom w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                        <w:right w:val='single' w:sz='4' w:space='0' w:color='888888'/>
-                                    </w:tcBorders>
-                                    """
-                                    tcPr = cell._element.get_or_add_tcPr()
-                                    tcPr.append(parse_xml(borders_xml))
-                                try:
-                                    os.remove(img_path)
-                                except Exception:
-                                    pass
-
-                            try:
-                                table.columns[col_idx].width = Mm(
-                                    content_width_mm + left_margin + right_margin
-                                )
-                            except IndexError:
-                                pass
-                        row_cells = []
-                        if (idx + 1) % (images_per_row * 2) == 0 and idx != len(prepared_gallery_items) - 1:
-                            images_subdoc.add_page_break()
+                    if index != len(gallery_groups) - 1:
+                        images_subdoc.add_page_break()
 
                 sign_info = signatories_for_row(
                     discipline,

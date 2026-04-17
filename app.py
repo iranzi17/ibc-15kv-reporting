@@ -2000,24 +2000,24 @@ def run_app():
 
     st.sidebar.subheader("Gallery Controls")
     img_width_mm = st.sidebar.slider(
-        "Image width (mm)", min_value=50, max_value=250, value=185, step=5
+        "Gallery width (mm)", min_value=120, max_value=250, value=185, step=5
     )
     img_height_mm = st.sidebar.slider(
-        "Image height (mm)", min_value=50, max_value=250, value=148, step=5
+        "Wide photo height (mm)", min_value=70, max_value=180, value=120, step=5
     )
     show_photo_placeholders = st.sidebar.checkbox(
-        "Show placeholder when photos are missing",
-        value=True,
+        "Show placeholder when no photos are available",
+        value=False,
     )
     st.sidebar.caption(
-        "Photos are auto-oriented, center-cropped, and normalized to the selected slot size before insertion."
+        "The gallery is composed as a report collage: two upper slots and one wide lower slot, matching the report style."
     )
     add_border = st.sidebar.checkbox("Add border to images", value=False)
     spacing_mm = st.sidebar.slider(
         "Gap between images (mm)", min_value=0, max_value=20, value=5, step=1
     )
     st.sidebar.caption(
-        "Gallery placeholders keep the report layout consistent when some site photos are missing or unreadable."
+        "For two-photo sets, the renderer prefers the portrait-plus-wide layout shown in your reference output when the images support it."
     )
 
     data_rows, sites, data_error = _load_sheet_context()

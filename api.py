@@ -41,10 +41,11 @@ NUM_COLS = len(REPORT_HEADERS)
 SHEET_RANGE = f"{SHEET_NAME}!A:N"
 DEFAULT_EXPORT_SETTINGS = {
     "img_width_mm": 185,
-    "img_height_mm": 148,
+    "img_height_mm": 120,
     "spacing_mm": 5,
     "img_per_row": 2,
     "add_border": False,
+    "show_photo_placeholders": False,
 }
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 AUTH_REQUIRED = os.environ.get("MOBILE_AUTH_REQUIRED", "").strip().lower() in {

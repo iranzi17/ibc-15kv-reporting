@@ -1,9 +1,7 @@
 from io import BytesIO
 import zipfile
-import xml.etree.ElementTree as ET
 
 from docx import Document
-from docx.shared import Mm
 from PIL import Image
 import pytest
 
@@ -19,6 +17,7 @@ def _png_bytes(width: int, height: int, color: tuple[int, int, int] = (255, 0, 0
 
 SQUARE_PNG = _png_bytes(200, 200)
 LANDSCAPE_PNG = _png_bytes(640, 320)
+PORTRAIT_PNG = _png_bytes(320, 640)
 
 
 def test_safe_filename():
@@ -101,6 +100,27 @@ def test_prepared_gallery_image_bytes_falls_back_to_placeholder_for_invalid_data
         assert image.size == (240, 160)
 
 
+def test_gallery_layout_name_prefers_portrait_plus_wide_for_mixed_pair():
+    assert report._gallery_layout_name([PORTRAIT_PNG, LANDSCAPE_PNG]) == "portrait_plus_wide"
+
+
+def test_compose_gallery_page_bytes_uses_full_gallery_width():
+    page = report._compose_gallery_page_bytes(
+        [PORTRAIT_PNG, LANDSCAPE_PNG],
+        gallery_width_mm=185,
+        wide_photo_height_mm=120,
+        spacing_mm=5,
+        add_border=False,
+        show_photo_placeholders=False,
+    )
+
+    geometry = report._gallery_layout_geometry(185, 120, 5)
+    expected_height = geometry["top_slot_height_px"] + geometry["gap_px"] + geometry["bottom_slot_height_px"]
+
+    with Image.open(BytesIO(page)) as image:
+        assert image.size == (geometry["total_width_px"], expected_height)
+
+
 def test_generate_reports_adds_placeholder_images_when_enabled():
     rows = [_empty_row("Site A", "2025-08-06")]
     data = report.generate_reports(
@@ -119,7 +139,7 @@ def test_generate_reports_adds_placeholder_images_when_enabled():
 
     document = Document(BytesIO(doc_bytes))
 
-    assert len(document.inline_shapes) > 2
+    assert len(document.inline_shapes) == 3
 
 
 def test_generate_reports_skips_placeholder_images_when_disabled():
@@ -143,11 +163,11 @@ def test_generate_reports_skips_placeholder_images_when_disabled():
     assert len(document.inline_shapes) == 2
 
 
-def test_generate_reports_respects_width_and_spacing():
+def test_generate_reports_uses_one_gallery_collage_for_three_photos():
     rows = [_empty_row("Site A", "2025-08-06")]
-    uploaded = {("Site A", "2025-08-06"): [SQUARE_PNG]}
-    width_mm = 42
-    height_mm = 25
+    uploaded = {("Site A", "2025-08-06"): [PORTRAIT_PNG, LANDSCAPE_PNG, SQUARE_PNG]}
+    width_mm = 185
+    height_mm = 120
     spacing_mm = 5
     data = report.generate_reports(
         rows,
@@ -164,22 +184,28 @@ def test_generate_reports_respects_width_and_spacing():
         doc_bytes = zf.read(docx_name)
 
     document = Document(BytesIO(doc_bytes))
-    document_xml = document.part.element.xml
 
-    root = ET.fromstring(document_xml)
-    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-    margin_sets = []
-    for tc_mar in root.findall(".//w:tcMar", ns):
-        values = {child.tag.split("}")[-1]: child.get(f"{{{ns['w']}}}w") for child in tc_mar}
-        margin_sets.append(values)
+    assert len(document.inline_shapes) == 3
 
-    outer = str(report._mm_to_twips(spacing_mm))
-    inner = str(report._mm_to_twips(spacing_mm / 2))
 
-    assert any(
-        margins.get("left") == outer and margins.get("right") == inner for margins in margin_sets
-    ), "Expected left cell to keep full outer margin and inner half-gap"
-    assert any(
-        margins.get("left") == inner and margins.get("right") == outer for margins in margin_sets
-    ), "Expected right cell to keep inner half-gap and full outer margin"
+def test_generate_reports_uses_two_collage_pages_for_four_photos():
+    rows = [_empty_row("Site A", "2025-08-06")]
+    uploaded = {("Site A", "2025-08-06"): [PORTRAIT_PNG, LANDSCAPE_PNG, SQUARE_PNG, LANDSCAPE_PNG]}
+    data = report.generate_reports(
+        rows,
+        uploaded,
+        "Civil",
+        185,
+        120,
+        5,
+        img_per_row=2,
+        add_border=False,
+        show_photo_placeholders=False,
+    )
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        doc_bytes = zf.read(zf.namelist()[0])
+
+    document = Document(BytesIO(doc_bytes))
+
+    assert len(document.inline_shapes) == 4
 
