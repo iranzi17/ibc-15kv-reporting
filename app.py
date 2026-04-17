@@ -1331,6 +1331,43 @@ def _request_transcription_with_openai(
     return "\n\n".join(transcripts)
 
 
+def _prepare_refinement_inputs(
+    latest_feedback: str,
+    *,
+    base_supporting_files: list[object] | None = None,
+    refinement_supporting_files: list[object] | None = None,
+    refinement_audio_files: list[object] | None = None,
+    api_key: str = "",
+    discipline: str = "",
+) -> tuple[str, list[object]]:
+    """Merge refinement attachments and voice notes into one refinement request."""
+    combined_files = list(base_supporting_files or [])
+    if refinement_supporting_files:
+        combined_files.extend(refinement_supporting_files)
+
+    feedback = str(latest_feedback or "").strip()
+    if not refinement_audio_files:
+        return feedback, combined_files
+
+    if not api_key:
+        raise ValueError("OpenAI API key is required for refinement voice notes.")
+
+    transcript = _request_transcription_with_openai(
+        list(refinement_audio_files),
+        api_key=api_key,
+        discipline=discipline,
+    ).strip()
+    if not transcript:
+        return feedback, combined_files
+
+    transcript_block = f"Additional refinement voice notes:\n{transcript}"
+    if feedback:
+        feedback = f"{feedback}\n\n{transcript_block}"
+    else:
+        feedback = transcript_block
+    return feedback, combined_files
+
+
 def _request_structured_reports_with_openai(
     raw_report_text: str,
     *,
@@ -2404,6 +2441,32 @@ def _render_contractor_parser(
     _safe_caption(
         "Chat with the converter like normal ChatGPT. Each accepted reply updates the converted rows directly."
     )
+    refinement_supporting_files = list(
+        _safe_file_uploader(
+            "Add refinement images or extra files (optional)",
+            accept_multiple_files=True,
+            type=CONTRACTOR_SUPPORTING_FILE_TYPES,
+            key="contractor_refinement_supporting_files",
+        )
+        or []
+    )
+    refinement_audio_files = list(
+        _safe_file_uploader(
+            "Add refinement voice notes (optional)",
+            accept_multiple_files=True,
+            type=AUDIO_FILE_TYPES,
+            key="contractor_refinement_audio_files",
+        )
+        or []
+    )
+    if refinement_supporting_files:
+        _safe_caption(
+            f"Refinement files ready: {', '.join(_uploaded_file_names(refinement_supporting_files))}"
+        )
+    if refinement_audio_files:
+        _safe_caption(
+            f"Refinement voice notes ready: {', '.join(_uploaded_file_names(refinement_audio_files))}"
+        )
 
     refinement_messages = st.session_state.setdefault(CONTRACTOR_CHAT_MESSAGES_KEY, [])
     for message in refinement_messages:
@@ -2438,7 +2501,14 @@ def _render_contractor_parser(
 
     if refinement_prompt:
         try:
-            has_source_material = bool(raw_report_text and raw_report_text.strip()) or bool(supporting_files)
+            has_source_material = any(
+                [
+                    bool(raw_report_text and raw_report_text.strip()),
+                    bool(supporting_files),
+                    bool(refinement_supporting_files),
+                    bool(refinement_audio_files),
+                ]
+            )
             if not has_source_material:
                 raise ValueError(
                     "Paste contractor report text, transcribe voice notes, or upload source files before asking for refinements."
@@ -2451,6 +2521,15 @@ def _render_contractor_parser(
             sdk_ready, sdk_error = _openai_sdk_ready()
             if not sdk_ready:
                 raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+
+            refinement_feedback, refinement_files = _prepare_refinement_inputs(
+                refinement_prompt,
+                base_supporting_files=supporting_files,
+                refinement_supporting_files=refinement_supporting_files,
+                refinement_audio_files=refinement_audio_files,
+                api_key=api_key,
+                discipline=discipline,
+            )
 
             knowledge_vector_store_id = ""
             if knowledge_files:
@@ -2468,9 +2547,9 @@ def _render_contractor_parser(
                     discipline=discipline,
                     current_rows=edited_rows,
                     conversation=refinement_messages,
-                    latest_feedback=refinement_prompt,
+                    latest_feedback=refinement_feedback,
                     allow_web_research=allow_web_research,
-                    supporting_files=supporting_files,
+                    supporting_files=refinement_files,
                     knowledge_vector_store_id=knowledge_vector_store_id,
                     persistent_guidance=converter_guidance,
                 )

@@ -423,6 +423,95 @@ def test_request_refined_structured_reports_with_openai_updates_rows(monkeypatch
     assert "Make the HSE note shorter and more professional." in captured["input"]
 
 
+def test_prepare_refinement_inputs_merges_voice_notes_and_files(monkeypatch):
+    captured = {}
+
+    def _fake_transcription(audio_files, *, api_key, discipline):
+        captured["audio_files"] = [uploaded_file.name for uploaded_file in audio_files]
+        captured["api_key"] = api_key
+        captured["discipline"] = discipline
+        return "Voice note (site-note.m4a):\nShorten the work comment."
+
+    monkeypatch.setattr(app, "_request_transcription_with_openai", _fake_transcription)
+
+    feedback, files = app._prepare_refinement_inputs(
+        "Make it more concise.",
+        base_supporting_files=[_UploadedFileStub("base.pdf", b"pdf-bytes", "application/pdf")],
+        refinement_supporting_files=[_UploadedFileStub("photo.jpg", b"image-bytes", "image/jpeg")],
+        refinement_audio_files=[_UploadedFileStub("site-note.m4a", b"audio-bytes", "audio/m4a")],
+        api_key="test-key",
+        discipline="Electrical",
+    )
+
+    assert "Make it more concise." in feedback
+    assert "Additional refinement voice notes:" in feedback
+    assert "Shorten the work comment." in feedback
+    assert [uploaded_file.name for uploaded_file in files] == ["base.pdf", "photo.jpg"]
+    assert captured == {
+        "audio_files": ["site-note.m4a"],
+        "api_key": "test-key",
+        "discipline": "Electrical",
+    }
+
+
+def test_request_refined_structured_reports_with_openai_supports_image_inputs(monkeypatch):
+    captured = {}
+    report = {
+        "Date": "2024-04-15",
+        "Site_Name": "Site A",
+        "District": "",
+        "Work": "",
+        "Human_Resources": "",
+        "Supply": "",
+        "Work_Executed": "",
+        "Comment_on_work": "",
+        "Another_Work_Executed": "",
+        "Comment_on_HSE": "",
+        "Consultant_Recommandation": "",
+        "Non_Compliant_work": "",
+        "Reaction_and_WayForword": "",
+        "challenges": "",
+    }
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            payload = {
+                "assistant_message": "I used the attached photo to improve the wording.",
+                "reports": [report],
+            }
+            return types.SimpleNamespace(output_text=str(payload).replace("'", '"'), output=[])
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    assistant_message, rows, sources = app._request_refined_structured_reports_with_openai(
+        "Raw contractor text",
+        api_key="test-key",
+        model="gpt-4o-mini",
+        discipline="Electrical",
+        current_rows=[report],
+        conversation=[],
+        latest_feedback="Use the attached image to improve the work executed wording.",
+        supporting_files=[_UploadedFileStub("site.jpg", b"image-bytes", "image/jpeg")],
+    )
+
+    assert assistant_message == "I used the attached photo to improve the wording."
+    assert rows == [report]
+    assert sources == []
+    assert captured["api_key"] == "test-key"
+    assert isinstance(captured["input"], list)
+    content = captured["input"][0]["content"]
+    assert content[0]["type"] == "input_text"
+    assert "Use the attached image" in content[0]["text"]
+    assert content[1]["type"] == "input_image"
+    assert content[1]["image_url"].startswith("data:image/jpeg;base64,")
+
+
 def test_clear_parsed_contractor_rows_clears_refinement_chat(monkeypatch):
     st_stub = types.SimpleNamespace(
         session_state={
