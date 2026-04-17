@@ -23,6 +23,7 @@ from ui_hero import render_hero
 st.set_page_config(page_title="WorkWatch - Site Intelligence", layout="wide")
 
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+RESEARCH_OPENAI_MODEL = "gpt-5.4-mini"
 OPENAI_API_KEY_SESSION_KEY = "openai_api_key"
 OPENAI_CHAT_MESSAGES_KEY = "openai_chat_messages"
 OPENAI_PREVIOUS_RESPONSE_ID_KEY = "openai_previous_response_id"
@@ -241,6 +242,57 @@ def _request_openai_reply(prompt: str, *, api_key: str, model: str) -> tuple[str
     return reply_text, str(getattr(response, "id", "") or "")
 
 
+def _converter_model(model: str, *, allow_web_research: bool) -> str:
+    """Return a model suitable for the contractor converter workflow."""
+    if not allow_web_research:
+        return model
+    if model.startswith("gpt-5"):
+        return model
+    return RESEARCH_OPENAI_MODEL
+
+
+def _extract_web_search_sources(response) -> list[dict[str, str]]:
+    """Extract unique web-search sources from a Responses API object."""
+    sources: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for item in getattr(response, "output", []) or []:
+        if str(getattr(item, "type", "") or "") != "web_search_call":
+            continue
+        action = getattr(item, "action", None)
+        action_sources = getattr(action, "sources", []) if action is not None else []
+        for source in action_sources or []:
+            if isinstance(source, dict):
+                title = str(source.get("title", "") or "").strip()
+                url = str(source.get("url", "") or "").strip()
+            else:
+                title = str(getattr(source, "title", "") or "").strip()
+                url = str(getattr(source, "url", "") or "").strip()
+
+            if not url:
+                continue
+            key = (title, url)
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append({"title": title, "url": url})
+
+    return sources
+
+
+def _converter_response_options(*, allow_web_research: bool) -> dict[str, object]:
+    """Build extra Responses API options for the contractor converter."""
+    if not allow_web_research:
+        return {}
+
+    return {
+        "reasoning": {"effort": "low"},
+        "tools": [{"type": "web_search"}],
+        "tool_choice": "auto",
+        "include": ["web_search_call.action.sources"],
+    }
+
+
 def _structured_report_rows(value: object) -> list[dict[str, str]]:
     """Normalize one or many structured reports into a list of row dicts."""
     if isinstance(value, dict):
@@ -382,7 +434,8 @@ def _request_structured_reports_with_openai(
     api_key: str,
     model: str,
     discipline: str,
-) -> list[dict[str, str]]:
+    allow_web_research: bool = False,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Turn raw contractor text into consultant-style report rows using OpenAI."""
     from openai import OpenAI
 
@@ -406,7 +459,7 @@ def _request_structured_reports_with_openai(
     ).strip()
 
     response = client.responses.create(
-        model=model,
+        model=_converter_model(model, allow_web_research=allow_web_research),
         instructions=instructions,
         input=raw_report_text,
         text={
@@ -418,6 +471,7 @@ def _request_structured_reports_with_openai(
             }
         },
         store=False,
+        **_converter_response_options(allow_web_research=allow_web_research),
     )
 
     payload_text = _extract_openai_output_text(response)
@@ -425,7 +479,7 @@ def _request_structured_reports_with_openai(
         raise ValueError("OpenAI returned an empty structured output.")
 
     payload = json.loads(payload_text)
-    return _structured_report_rows(payload)
+    return _structured_report_rows(payload), _extract_web_search_sources(response)
 
 
 def _request_refined_structured_reports_with_openai(
@@ -437,7 +491,8 @@ def _request_refined_structured_reports_with_openai(
     current_rows: list[dict[str, str]],
     conversation: list[dict[str, str]],
     latest_feedback: str,
-) -> tuple[str, list[dict[str, str]]]:
+    allow_web_research: bool = False,
+) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
     """Apply user chat feedback to the converted consultant rows."""
     from openai import OpenAI
 
@@ -452,6 +507,7 @@ def _request_refined_structured_reports_with_openai(
         - Update the reports directly to reflect the user's latest instruction.
         - Keep every field grounded in the contractor source text and the current structured rows.
         - Do not invent facts, dates, site names, manpower, materials, quality issues, or HSE events.
+        - If web research is available, use it only to improve technical terminology, safety guidance, consultant wording, or general best-practice recommendations.
         - If the user requests a change that is not supported by the source text, explain that briefly in assistant_message and keep the unsupported part unchanged.
         - If the user asks a question, answer it in assistant_message and still return the best current reports.
         - assistant_message should be concise and directly state what changed or why something could not be changed.
@@ -475,7 +531,7 @@ def _request_refined_structured_reports_with_openai(
     ).strip()
 
     response = client.responses.create(
-        model=model,
+        model=_converter_model(model, allow_web_research=allow_web_research),
         instructions=instructions,
         input=request_text,
         text={
@@ -487,6 +543,7 @@ def _request_refined_structured_reports_with_openai(
             }
         },
         store=False,
+        **_converter_response_options(allow_web_research=allow_web_research),
     )
 
     payload_text = _extract_openai_output_text(response)
@@ -497,7 +554,11 @@ def _request_refined_structured_reports_with_openai(
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     if not assistant_message:
         assistant_message = "I updated the converted consultant rows."
-    return assistant_message, _structured_report_rows(payload.get("reports", []))
+    return (
+        assistant_message,
+        _structured_report_rows(payload.get("reports", [])),
+        _extract_web_search_sources(response),
+    )
 
 
 def _reset_contractor_chat(rows: list[dict[str, str]], *, source_label: str) -> None:
@@ -510,14 +571,47 @@ def _reset_contractor_chat(rows: list[dict[str, str]], *, source_label: str) -> 
                 f"{source_label} produced {count} structured report row(s). "
                 "Tell me what to improve, and I will update the converted rows directly."
             ),
+            "sources": [],
         }
     ]
 
 
-def _append_contractor_chat_message(role: str, content: str) -> None:
+def _append_contractor_chat_message(
+    role: str,
+    content: str,
+    *,
+    sources: list[dict[str, str]] | None = None,
+) -> None:
     """Append one message to the contractor-refinement chat transcript."""
     messages = st.session_state.setdefault(CONTRACTOR_CHAT_MESSAGES_KEY, [])
-    messages.append({"role": role, "content": content})
+    messages.append(
+        {
+            "role": role,
+            "content": content,
+            "sources": list(sources or []),
+        }
+    )
+
+
+def _render_contractor_chat_message(message: dict[str, object]) -> None:
+    """Render one contractor-refinement chat message with optional sources."""
+    with _safe_chat_message(str(message.get("role", "assistant"))):
+        _safe_write(message.get("content", ""))
+        sources = message.get("sources", [])
+        if not isinstance(sources, list) or not sources:
+            return
+
+        lines = ["Sources:"]
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            url = str(source.get("url", "") or "").strip()
+            if not url:
+                continue
+            title = str(source.get("title", "") or "").strip() or url
+            lines.append(f"- [{title}]({url})")
+        if len(lines) > 1:
+            _safe_markdown("\n".join(lines))
 
 
 def _persist_parsed_contractor_rows(
@@ -670,6 +764,15 @@ def _render_contractor_parser(discipline: str) -> None:
         height=220,
         key="contractor_report_text",
     )
+    allow_web_research = _safe_checkbox(
+        "Allow web research in converter chat",
+        value=False,
+        key="contractor_converter_web_research",
+    )
+    if allow_web_research:
+        _safe_caption(
+            "Research mode is slower and adds web-search tool cost. The converter will use web search when helpful and show clickable sources in the chat."
+        )
 
     if st.button("Convert with ChatGPT"):
         try:
@@ -684,11 +787,12 @@ def _render_contractor_parser(discipline: str) -> None:
                 raise ValueError("OpenAI SDK is not installed in the active Streamlit environment.")
 
             with _safe_spinner("Converting contractor report with ChatGPT..."):
-                parsed_rows = _request_structured_reports_with_openai(
+                parsed_rows, research_sources = _request_structured_reports_with_openai(
                     raw_report_text.strip(),
                     api_key=api_key,
                     model=_default_openai_model(),
                     discipline=discipline,
+                    allow_web_research=allow_web_research,
                 )
         except Exception as exc:
             st.warning(f"ChatGPT conversion failed: {exc}")
@@ -698,6 +802,12 @@ def _render_contractor_parser(discipline: str) -> None:
                 reset_chat=True,
                 source_label="ChatGPT",
             )
+            if research_sources:
+                st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["content"] = (
+                    st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["content"]
+                    + " Web research was used where helpful."
+                )
+                st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["sources"] = research_sources
             st.success(f"ChatGPT produced {len(parsed_rows)} structured report row(s).")
 
     if st.button("Use local parser"):
@@ -742,8 +852,7 @@ def _render_contractor_parser(discipline: str) -> None:
 
     refinement_messages = st.session_state.setdefault(CONTRACTOR_CHAT_MESSAGES_KEY, [])
     for message in refinement_messages:
-        with _safe_chat_message(str(message.get("role", "assistant"))):
-            _safe_write(message.get("content", ""))
+        _render_contractor_chat_message(message)
 
     reset_chat_col, append_col = _safe_columns(2, gap="large")
     with reset_chat_col:
@@ -785,7 +894,7 @@ def _render_contractor_parser(discipline: str) -> None:
                 raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
 
             with _safe_spinner("Applying your refinement request..."):
-                assistant_message, refined_rows = _request_refined_structured_reports_with_openai(
+                assistant_message, refined_rows, research_sources = _request_refined_structured_reports_with_openai(
                     raw_report_text.strip(),
                     api_key=api_key,
                     model=_default_openai_model(),
@@ -793,12 +902,17 @@ def _render_contractor_parser(discipline: str) -> None:
                     current_rows=edited_rows,
                     conversation=refinement_messages,
                     latest_feedback=refinement_prompt,
+                    allow_web_research=allow_web_research,
                 )
         except Exception as exc:
             st.warning(f"ChatGPT refinement failed: {exc}")
         else:
             _append_contractor_chat_message("user", refinement_prompt)
-            _append_contractor_chat_message("assistant", assistant_message)
+            _append_contractor_chat_message(
+                "assistant",
+                assistant_message,
+                sources=research_sources,
+            )
             _persist_parsed_contractor_rows(refined_rows)
             st.success("Converted rows updated from your instruction.")
             _safe_rerun()

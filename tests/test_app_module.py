@@ -329,7 +329,10 @@ def test_request_structured_reports_with_openai_parses_schema_response(monkeypat
     class _FakeResponses:
         def create(self, **kwargs):
             captured.update(kwargs)
-            return types.SimpleNamespace(output_text=f'{{"reports": [{report!r}]}}'.replace("'", '"'))
+            return types.SimpleNamespace(
+                output_text=f'{{"reports": [{report!r}]}}'.replace("'", '"'),
+                output=[],
+            )
 
     class _FakeClient:
         def __init__(self, api_key):
@@ -338,7 +341,7 @@ def test_request_structured_reports_with_openai_parses_schema_response(monkeypat
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
 
-    rows = app._request_structured_reports_with_openai(
+    rows, sources = app._request_structured_reports_with_openai(
         "Raw contractor text",
         api_key="test-key",
         model="gpt-4o-mini",
@@ -346,10 +349,12 @@ def test_request_structured_reports_with_openai_parses_schema_response(monkeypat
     )
 
     assert rows == [report]
+    assert sources == []
     assert captured["api_key"] == "test-key"
     assert captured["model"] == "gpt-4o-mini"
     assert captured["store"] is False
     assert captured["text"]["format"]["type"] == "json_schema"
+    assert "tools" not in captured
 
 
 def test_request_refined_structured_reports_with_openai_updates_rows(monkeypatch):
@@ -378,7 +383,7 @@ def test_request_refined_structured_reports_with_openai_updates_rows(monkeypatch
                 "assistant_message": "I tightened the consultant language and updated the HSE wording.",
                 "reports": [report],
             }
-            return types.SimpleNamespace(output_text=str(payload).replace("'", '"'))
+            return types.SimpleNamespace(output_text=str(payload).replace("'", '"'), output=[])
 
     class _FakeClient:
         def __init__(self, api_key):
@@ -387,7 +392,7 @@ def test_request_refined_structured_reports_with_openai_updates_rows(monkeypatch
 
     monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
 
-    assistant_message, rows = app._request_refined_structured_reports_with_openai(
+    assistant_message, rows, sources = app._request_refined_structured_reports_with_openai(
         "Raw contractor text",
         api_key="test-key",
         model="gpt-4o-mini",
@@ -399,6 +404,7 @@ def test_request_refined_structured_reports_with_openai_updates_rows(monkeypatch
 
     assert assistant_message == "I tightened the consultant language and updated the HSE wording."
     assert rows == [report]
+    assert sources == []
     assert captured["api_key"] == "test-key"
     assert captured["model"] == "gpt-4o-mini"
     assert captured["text"]["format"]["type"] == "json_schema"
@@ -419,3 +425,74 @@ def test_clear_parsed_contractor_rows_clears_refinement_chat(monkeypatch):
 
     assert app.PARSED_CONTRACTOR_REPORTS_KEY not in st_stub.session_state
     assert app.CONTRACTOR_CHAT_MESSAGES_KEY not in st_stub.session_state
+
+
+def test_converter_model_uses_gpt5_mini_for_web_research():
+    assert app._converter_model("gpt-4o-mini", allow_web_research=True) == app.RESEARCH_OPENAI_MODEL
+    assert app._converter_model("gpt-5.4", allow_web_research=True) == "gpt-5.4"
+    assert app._converter_model("gpt-4o-mini", allow_web_research=False) == "gpt-4o-mini"
+
+
+def test_extract_web_search_sources_deduplicates_items():
+    response = types.SimpleNamespace(
+        output=[
+            types.SimpleNamespace(
+                type="web_search_call",
+                action=types.SimpleNamespace(
+                    sources=[
+                        types.SimpleNamespace(title="Source A", url="https://example.com/a"),
+                        types.SimpleNamespace(title="Source A", url="https://example.com/a"),
+                        {"title": "Source B", "url": "https://example.com/b"},
+                    ]
+                ),
+            )
+        ]
+    )
+
+    sources = app._extract_web_search_sources(response)
+
+    assert sources == [
+        {"title": "Source A", "url": "https://example.com/a"},
+        {"title": "Source B", "url": "https://example.com/b"},
+    ]
+
+
+def test_request_structured_reports_with_openai_enables_web_search(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(
+                output_text='{"reports": [{"Date": "", "Site_Name": "Site A", "District": "", "Work": "", "Human_Resources": "", "Supply": "", "Work_Executed": "", "Comment_on_work": "", "Another_Work_Executed": "", "Comment_on_HSE": "", "Consultant_Recommandation": "", "Non_Compliant_work": "", "Reaction_and_WayForword": "", "challenges": ""}]}',
+                output=[
+                    types.SimpleNamespace(
+                        type="web_search_call",
+                        action=types.SimpleNamespace(
+                            sources=[types.SimpleNamespace(title="IEC note", url="https://example.com/iec")]
+                        ),
+                    )
+                ],
+            )
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    rows, sources = app._request_structured_reports_with_openai(
+        "Raw contractor text",
+        api_key="test-key",
+        model="gpt-4o-mini",
+        discipline="Electrical",
+        allow_web_research=True,
+    )
+
+    assert rows[0]["Site_Name"] == "Site A"
+    assert sources == [{"title": "IEC note", "url": "https://example.com/iec"}]
+    assert captured["model"] == app.RESEARCH_OPENAI_MODEL
+    assert captured["tools"] == [{"type": "web_search"}]
+    assert captured["tool_choice"] == "auto"
+    assert captured["include"] == ["web_search_call.action.sources"]
