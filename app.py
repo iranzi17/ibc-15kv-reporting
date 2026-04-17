@@ -257,6 +257,17 @@ def _safe_audio(data, **kwargs) -> None:
         audio_fn(data, **kwargs)
 
 
+def _safe_audio_input(label: str, **kwargs):
+    """Call st.audio_input when available, otherwise return None."""
+    audio_input_fn = getattr(st, "audio_input", None)
+    if callable(audio_input_fn):
+        try:
+            return audio_input_fn(label, **kwargs)
+        except TypeError:
+            return audio_input_fn(label)
+    return None
+
+
 def _utc_timestamp() -> str:
     """Return an ISO timestamp in UTC."""
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -1368,6 +1379,22 @@ def _prepare_refinement_inputs(
     return feedback, combined_files
 
 
+def _refinement_request_preview(
+    latest_feedback: str,
+    *,
+    include_voice_instruction: bool = False,
+) -> str:
+    """Return a user-visible summary for one refinement request."""
+    prompt = str(latest_feedback or "").strip()
+    if prompt and include_voice_instruction:
+        return f"{prompt}\n\n[Voice instruction attached]"
+    if prompt:
+        return prompt
+    if include_voice_instruction:
+        return "[Voice instruction attached]"
+    return ""
+
+
 def _request_structured_reports_with_openai(
     raw_report_text: str,
     *,
@@ -2441,6 +2468,14 @@ def _render_contractor_parser(
     _safe_caption(
         "Chat with the converter like normal ChatGPT. Each accepted reply updates the converted rows directly."
     )
+    recorded_refinement_audio = _safe_audio_input(
+        "Record refinement instruction",
+        key="contractor_refinement_audio_recording",
+        help="Record a microphone instruction and apply it directly to the converted rows.",
+    )
+    if recorded_refinement_audio:
+        _safe_caption(f"Recorded refinement audio ready: {_uploaded_file_name(recorded_refinement_audio)}")
+        _safe_audio(recorded_refinement_audio, format=_uploaded_file_mime_type(recorded_refinement_audio))
     refinement_supporting_files = list(
         _safe_file_uploader(
             "Add refinement images or extra files (optional)",
@@ -2498,20 +2533,28 @@ def _render_contractor_parser(
         "Tell ChatGPT what to improve in the converted consultant report.",
         key="contractor_refinement_chat_input",
     )
+    apply_voice_refinement = st.button("Apply voice refinement")
+    voice_refinement_inputs = list(refinement_audio_files)
+    if apply_voice_refinement and recorded_refinement_audio:
+        voice_refinement_inputs.append(recorded_refinement_audio)
 
-    if refinement_prompt:
+    if refinement_prompt or apply_voice_refinement:
         try:
             has_source_material = any(
                 [
                     bool(raw_report_text and raw_report_text.strip()),
                     bool(supporting_files),
                     bool(refinement_supporting_files),
-                    bool(refinement_audio_files),
+                    bool(voice_refinement_inputs),
                 ]
             )
             if not has_source_material:
                 raise ValueError(
                     "Paste contractor report text, transcribe voice notes, or upload source files before asking for refinements."
+                )
+            if not str(refinement_prompt or "").strip() and not voice_refinement_inputs:
+                raise ValueError(
+                    "Type a refinement request, record a microphone instruction, or upload a voice note before asking for refinements."
                 )
 
             api_key = _load_openai_api_key()
@@ -2523,10 +2566,10 @@ def _render_contractor_parser(
                 raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
 
             refinement_feedback, refinement_files = _prepare_refinement_inputs(
-                refinement_prompt,
+                str(refinement_prompt or "").strip(),
                 base_supporting_files=supporting_files,
                 refinement_supporting_files=refinement_supporting_files,
-                refinement_audio_files=refinement_audio_files,
+                refinement_audio_files=voice_refinement_inputs,
                 api_key=api_key,
                 discipline=discipline,
             )
@@ -2557,7 +2600,11 @@ def _render_contractor_parser(
             st.warning(f"ChatGPT refinement failed: {exc}")
             _record_runtime_issue("converter", "ChatGPT refinement failed.", details=str(exc))
         else:
-            _append_contractor_chat_message("user", refinement_prompt)
+            user_message = _refinement_request_preview(
+                refinement_prompt,
+                include_voice_instruction=bool(voice_refinement_inputs),
+            )
+            _append_contractor_chat_message("user", user_message)
             _append_contractor_chat_message(
                 "assistant",
                 assistant_message,

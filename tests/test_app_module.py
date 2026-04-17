@@ -454,6 +454,18 @@ def test_prepare_refinement_inputs_merges_voice_notes_and_files(monkeypatch):
     }
 
 
+def test_refinement_request_preview_marks_voice_instruction():
+    assert app._refinement_request_preview("Tighten the HSE wording.") == "Tighten the HSE wording."
+    assert (
+        app._refinement_request_preview(
+            "Tighten the HSE wording.",
+            include_voice_instruction=True,
+        )
+        == "Tighten the HSE wording.\n\n[Voice instruction attached]"
+    )
+    assert app._refinement_request_preview("", include_voice_instruction=True) == "[Voice instruction attached]"
+
+
 def test_request_refined_structured_reports_with_openai_supports_image_inputs(monkeypatch):
     captured = {}
     report = {
