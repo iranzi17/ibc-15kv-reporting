@@ -350,3 +350,72 @@ def test_request_structured_reports_with_openai_parses_schema_response(monkeypat
     assert captured["model"] == "gpt-4o-mini"
     assert captured["store"] is False
     assert captured["text"]["format"]["type"] == "json_schema"
+
+
+def test_request_refined_structured_reports_with_openai_updates_rows(monkeypatch):
+    captured = {}
+    report = {
+        "Date": "2024-04-15",
+        "Site_Name": "KIBAGABAGA SMART CABIN",
+        "District": "",
+        "Work": "Connecting the existing MV and LV Lines",
+        "Human_Resources": "1 Supervisor, 2 Technicians, 4 Helpers",
+        "Supply": "MV cables, termination kits",
+        "Work_Executed": "Executed MV cable termination for 2 sets and started MV cable laying.",
+        "Comment_on_work": "Progress is aligned with the project schedule.",
+        "Another_Work_Executed": "",
+        "Comment_on_HSE": "PPE compliance observed.",
+        "Consultant_Recommandation": "Continue with careful cable handling.",
+        "Non_Compliant_work": "",
+        "Reaction_and_WayForword": "Proceed with the remaining cable laying.",
+        "challenges": "",
+    }
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            payload = {
+                "assistant_message": "I tightened the consultant language and updated the HSE wording.",
+                "reports": [report],
+            }
+            return types.SimpleNamespace(output_text=str(payload).replace("'", '"'))
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    assistant_message, rows = app._request_refined_structured_reports_with_openai(
+        "Raw contractor text",
+        api_key="test-key",
+        model="gpt-4o-mini",
+        discipline="Electrical",
+        current_rows=[report],
+        conversation=[{"role": "assistant", "content": "Tell me what to improve."}],
+        latest_feedback="Make the HSE note shorter and more professional.",
+    )
+
+    assert assistant_message == "I tightened the consultant language and updated the HSE wording."
+    assert rows == [report]
+    assert captured["api_key"] == "test-key"
+    assert captured["model"] == "gpt-4o-mini"
+    assert captured["text"]["format"]["type"] == "json_schema"
+    assert "Raw contractor text" in captured["input"]
+    assert "Make the HSE note shorter and more professional." in captured["input"]
+
+
+def test_clear_parsed_contractor_rows_clears_refinement_chat(monkeypatch):
+    st_stub = types.SimpleNamespace(
+        session_state={
+            app.PARSED_CONTRACTOR_REPORTS_KEY: [{"Date": "2024-04-15"}],
+            app.CONTRACTOR_CHAT_MESSAGES_KEY: [{"role": "assistant", "content": "Hello"}],
+        }
+    )
+    monkeypatch.setattr(app, "st", st_stub)
+
+    app._clear_parsed_contractor_rows()
+
+    assert app.PARSED_CONTRACTOR_REPORTS_KEY not in st_stub.session_state
+    assert app.CONTRACTOR_CHAT_MESSAGES_KEY not in st_stub.session_state

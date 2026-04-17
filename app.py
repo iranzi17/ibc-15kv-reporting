@@ -37,6 +37,7 @@ OPENAI_CHAT_MESSAGES_KEY = "openai_chat_messages"
 OPENAI_PREVIOUS_RESPONSE_ID_KEY = "openai_previous_response_id"
 OPENAI_MODEL_SESSION_KEY = "openai_model"
 PARSED_CONTRACTOR_REPORTS_KEY = "parsed_contractor_reports"
+CONTRACTOR_CHAT_MESSAGES_KEY = "contractor_converter_chat_messages"
 
 
 def _safe_columns(*args, **kwargs):
@@ -319,8 +320,8 @@ def _validate_structured_rows_for_sheet(rows: list[dict[str, str]]) -> list[str]
     return errors
 
 
-def _consultant_report_response_schema() -> dict[str, object]:
-    """Return the JSON schema used for AI-powered consultant report extraction."""
+def _consultant_report_row_schema() -> dict[str, object]:
+    """Return the JSON schema for one consultant report row."""
     field_descriptions = {
         "Date": "The report date exactly as stated in the source text. Empty string if unknown.",
         "Site_Name": "The site name or location name from the source text.",
@@ -338,7 +339,7 @@ def _consultant_report_response_schema() -> dict[str, object]:
         "challenges": "Main constraints, delays, risks, or challenges mentioned.",
     }
 
-    row_schema = {
+    return {
         "type": "object",
         "properties": {
             header: {
@@ -351,18 +352,52 @@ def _consultant_report_response_schema() -> dict[str, object]:
         "additionalProperties": False,
     }
 
+
+def _consultant_report_response_schema() -> dict[str, object]:
+    """Return the JSON schema used for AI-powered consultant report extraction."""
     return {
         "type": "object",
         "properties": {
             "reports": {
                 "type": "array",
                 "minItems": 1,
-                "items": row_schema,
+                "items": _consultant_report_row_schema(),
             }
         },
         "required": ["reports"],
         "additionalProperties": False,
     }
+
+
+def _contractor_refinement_response_schema() -> dict[str, object]:
+    """Return the JSON schema for chat-based contractor report refinements."""
+    return {
+        "type": "object",
+        "properties": {
+            "assistant_message": {
+                "type": "string",
+                "description": "Short natural-language reply to the user describing what was improved.",
+            },
+            "reports": {
+                "type": "array",
+                "minItems": 1,
+                "items": _consultant_report_row_schema(),
+            },
+        },
+        "required": ["assistant_message", "reports"],
+        "additionalProperties": False,
+    }
+
+
+def _conversation_transcript(messages: list[dict[str, str]]) -> str:
+    """Serialize chat history into a compact plain-text transcript."""
+    lines: list[str] = []
+    for message in messages:
+        role = str(message.get("role", "assistant") or "assistant").strip().upper()
+        content = str(message.get("content", "") or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines).strip() or "No prior refinement chat."
 
 
 def _request_structured_reports_with_openai(
@@ -417,17 +452,117 @@ def _request_structured_reports_with_openai(
     return _structured_report_rows(payload)
 
 
-def _persist_parsed_contractor_rows(rows: list[dict[str, str]]) -> None:
+def _request_refined_structured_reports_with_openai(
+    raw_report_text: str,
+    *,
+    api_key: str,
+    model: str,
+    discipline: str,
+    current_rows: list[dict[str, str]],
+    conversation: list[dict[str, str]],
+    latest_feedback: str,
+) -> tuple[str, list[dict[str, str]]]:
+    """Apply user chat feedback to the converted consultant rows."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    instructions = textwrap.dedent(
+        f"""
+        You are an experienced consultant assistant revising a {discipline.lower()} daily consultant report.
+        The user is chatting with you to improve the converted report as if speaking to normal ChatGPT.
+
+        Rules:
+        - Return JSON that matches the schema exactly.
+        - Update the reports directly to reflect the user's latest instruction.
+        - Keep every field grounded in the contractor source text and the current structured rows.
+        - Do not invent facts, dates, site names, manpower, materials, quality issues, or HSE events.
+        - If the user requests a change that is not supported by the source text, explain that briefly in assistant_message and keep the unsupported part unchanged.
+        - If the user asks a question, answer it in assistant_message and still return the best current reports.
+        - assistant_message should be concise and directly state what changed or why something could not be changed.
+        """
+    ).strip()
+
+    request_text = textwrap.dedent(
+        f"""
+        Raw contractor report:
+        {raw_report_text}
+
+        Current structured consultant rows (JSON):
+        {json.dumps(current_rows, ensure_ascii=True, indent=2)}
+
+        Prior refinement chat:
+        {_conversation_transcript(conversation)}
+
+        Latest user instruction:
+        {latest_feedback}
+        """
+    ).strip()
+
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=request_text,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "consultant_report_refinement",
+                "strict": True,
+                "schema": _contractor_refinement_response_schema(),
+            }
+        },
+        store=False,
+    )
+
+    payload_text = _extract_openai_output_text(response)
+    if not payload_text:
+        raise ValueError("OpenAI returned an empty refinement output.")
+
+    payload = json.loads(payload_text)
+    assistant_message = str(payload.get("assistant_message", "") or "").strip()
+    if not assistant_message:
+        assistant_message = "I updated the converted consultant rows."
+    return assistant_message, _structured_report_rows(payload.get("reports", []))
+
+
+def _reset_contractor_chat(rows: list[dict[str, str]], *, source_label: str) -> None:
+    """Reset the contractor-refinement chat after a fresh conversion."""
+    count = len(_structured_report_rows(rows))
+    st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY] = [
+        {
+            "role": "assistant",
+            "content": (
+                f"{source_label} produced {count} structured report row(s). "
+                "Tell me what to improve, and I will update the converted rows directly."
+            ),
+        }
+    ]
+
+
+def _append_contractor_chat_message(role: str, content: str) -> None:
+    """Append one message to the contractor-refinement chat transcript."""
+    messages = st.session_state.setdefault(CONTRACTOR_CHAT_MESSAGES_KEY, [])
+    messages.append({"role": role, "content": content})
+
+
+def _persist_parsed_contractor_rows(
+    rows: list[dict[str, str]],
+    *,
+    reset_chat: bool = False,
+    source_label: str = "ChatGPT",
+) -> None:
     """Store parsed contractor rows in session state."""
     normalized_rows = _structured_report_rows(rows)
     st.session_state[PARSED_CONTRACTOR_REPORTS_KEY] = normalized_rows
     st.session_state["structured_report_data"] = normalized_rows
     st.session_state["_structured_origin"] = "manual"
+    if reset_chat:
+        _reset_contractor_chat(normalized_rows, source_label=source_label)
 
 
 def _clear_parsed_contractor_rows() -> None:
     """Remove parsed contractor rows from session state."""
     st.session_state.pop(PARSED_CONTRACTOR_REPORTS_KEY, None)
+    st.session_state.pop(CONTRACTOR_CHAT_MESSAGES_KEY, None)
 
 
 def _clear_cached_sheet_data() -> None:
@@ -582,7 +717,11 @@ def _render_contractor_parser(discipline: str) -> None:
         except Exception as exc:
             st.warning(f"ChatGPT conversion failed: {exc}")
         else:
-            _persist_parsed_contractor_rows(parsed_rows)
+            _persist_parsed_contractor_rows(
+                parsed_rows,
+                reset_chat=True,
+                source_label="ChatGPT",
+            )
             st.success(f"ChatGPT produced {len(parsed_rows)} structured report row(s).")
 
     if st.button("Use local parser"):
@@ -591,7 +730,11 @@ def _render_contractor_parser(discipline: str) -> None:
         except (TypeError, ValueError) as exc:
             st.warning(f"Unable to structure report locally: {exc}")
         else:
-            _persist_parsed_contractor_rows(parsed_rows)
+            _persist_parsed_contractor_rows(
+                parsed_rows,
+                reset_chat=True,
+                source_label="Local parser",
+            )
             st.success(f"Local parser produced {len(parsed_rows)} structured report row(s).")
 
     if st.button("Clear parsed contractor result"):
@@ -616,20 +759,73 @@ def _render_contractor_parser(discipline: str) -> None:
     st.session_state[PARSED_CONTRACTOR_REPORTS_KEY] = edited_rows
     st.session_state["structured_report_data"] = edited_rows
 
-    if st.button("Append Converted Rows to Google Sheet"):
-        validation_errors = _validate_structured_rows_for_sheet(edited_rows)
-        if validation_errors:
-            for error in validation_errors:
-                st.warning(error)
-        else:
-            try:
-                append_rows_to_sheet(_structured_rows_to_sheet_rows(edited_rows))
-                _clear_cached_sheet_data()
-            except Exception as exc:
-                st.error(f"Failed to append converted rows to Google Sheet: {exc}")
+    st.subheader("Refine With ChatGPT")
+    _safe_caption(
+        "Chat with the converter like normal ChatGPT. Each accepted reply updates the converted rows directly."
+    )
+
+    refinement_messages = st.session_state.setdefault(CONTRACTOR_CHAT_MESSAGES_KEY, [])
+    for message in refinement_messages:
+        with _safe_chat_message(str(message.get("role", "assistant"))):
+            _safe_write(message.get("content", ""))
+
+    reset_chat_col, append_col = _safe_columns(2, gap="large")
+    with reset_chat_col:
+        if st.button("Reset refinement chat"):
+            _reset_contractor_chat(edited_rows, source_label="Current converter")
+            _safe_rerun()
+    with append_col:
+        if st.button("Append Converted Rows to Google Sheet"):
+            validation_errors = _validate_structured_rows_for_sheet(edited_rows)
+            if validation_errors:
+                for error in validation_errors:
+                    st.warning(error)
             else:
-                st.success(f"Added {len(edited_rows)} row(s) to Google Sheet.")
-                _safe_rerun()
+                try:
+                    append_rows_to_sheet(_structured_rows_to_sheet_rows(edited_rows))
+                    _clear_cached_sheet_data()
+                except Exception as exc:
+                    st.error(f"Failed to append converted rows to Google Sheet: {exc}")
+                else:
+                    st.success(f"Added {len(edited_rows)} row(s) to Google Sheet.")
+                    _safe_rerun()
+
+    refinement_prompt = _safe_chat_input(
+        "Tell ChatGPT what to improve in the converted consultant report.",
+        key="contractor_refinement_chat_input",
+    )
+
+    if refinement_prompt:
+        try:
+            if not raw_report_text or not raw_report_text.strip():
+                raise ValueError("Paste contractor report text before asking for refinements.")
+
+            api_key = _load_openai_api_key()
+            if not api_key:
+                raise ValueError("OpenAI API key is required for refinement chat.")
+
+            sdk_ready, sdk_error = _openai_sdk_ready()
+            if not sdk_ready:
+                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+
+            with _safe_spinner("Applying your refinement request..."):
+                assistant_message, refined_rows = _request_refined_structured_reports_with_openai(
+                    raw_report_text.strip(),
+                    api_key=api_key,
+                    model=_default_openai_model(),
+                    discipline=discipline,
+                    current_rows=edited_rows,
+                    conversation=refinement_messages,
+                    latest_feedback=refinement_prompt,
+                )
+        except Exception as exc:
+            st.warning(f"ChatGPT refinement failed: {exc}")
+        else:
+            _append_contractor_chat_message("user", refinement_prompt)
+            _append_contractor_chat_message("assistant", assistant_message)
+            _persist_parsed_contractor_rows(refined_rows)
+            st.success("Converted rows updated from your instruction.")
+            _safe_rerun()
 
 
 def _load_sheet_context():
