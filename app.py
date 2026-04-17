@@ -1264,6 +1264,43 @@ def _clear_openai_chat() -> None:
     st.session_state.pop(OPENAI_PREVIOUS_RESPONSE_ID_KEY, None)
 
 
+def _generate_reports_with_gallery_options(
+    review_rows: list[list[str]],
+    images: dict,
+    discipline: str,
+    img_width_mm: int,
+    img_height_mm: int,
+    spacing_mm: int,
+    *,
+    add_border: bool,
+    show_photo_placeholders: bool,
+):
+    """Call report generation with backwards-compatible gallery options."""
+    base_args = (
+        review_rows,
+        images,
+        discipline,
+        img_width_mm,
+        img_height_mm,
+        spacing_mm,
+    )
+    base_kwargs = {
+        "img_per_row": 2,
+        "add_border": add_border,
+    }
+
+    try:
+        return generate_reports(
+            *base_args,
+            **base_kwargs,
+            show_photo_placeholders=show_photo_placeholders,
+        )
+    except TypeError as exc:
+        if "show_photo_placeholders" not in str(exc):
+            raise
+        return generate_reports(*base_args, **base_kwargs)
+
+
 def _render_project_knowledge_base_panel() -> list[object]:
     """Render the shared knowledge-base uploader used by AI workflows."""
     st.subheader("Project Knowledge Base")
@@ -2120,14 +2157,13 @@ def run_app():
             st.warning("No data available for the selected sites and dates.")
             return
 
-        zip_bytes = generate_reports(
+        zip_bytes = _generate_reports_with_gallery_options(
             review_rows,
             st.session_state.get("images", {}),
             discipline,
             img_width_mm,
             img_height_mm,
             spacing_mm,
-            img_per_row=2,
             add_border=add_border,
             show_photo_placeholders=show_photo_placeholders,
         )

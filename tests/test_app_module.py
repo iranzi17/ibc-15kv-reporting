@@ -706,3 +706,57 @@ def test_request_text_to_speech_with_openai_returns_audio_bytes(monkeypatch):
     assert captured["model"] == app.TTS_OPENAI_MODEL
     assert captured["voice"] == "coral"
     assert captured["response_format"] == "mp3"
+
+
+def test_generate_reports_with_gallery_options_passes_new_gallery_flag(monkeypatch):
+    captured = {}
+
+    def _fake_generate_reports(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return b"zip-bytes"
+
+    monkeypatch.setattr(app, "generate_reports", _fake_generate_reports)
+
+    result = app._generate_reports_with_gallery_options(
+        [["2025-08-06", "Site A"] + [""] * 12],
+        {},
+        "Civil",
+        185,
+        148,
+        5,
+        add_border=True,
+        show_photo_placeholders=False,
+    )
+
+    assert result == b"zip-bytes"
+    assert captured["kwargs"]["img_per_row"] == 2
+    assert captured["kwargs"]["add_border"] is True
+    assert captured["kwargs"]["show_photo_placeholders"] is False
+
+
+def test_generate_reports_with_gallery_options_falls_back_for_legacy_signature(monkeypatch):
+    captured = {}
+
+    def _legacy_generate_reports(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        if "show_photo_placeholders" in kwargs:
+            raise TypeError("generate_reports() got an unexpected keyword argument 'show_photo_placeholders'")
+        return b"legacy-zip"
+
+    monkeypatch.setattr(app, "generate_reports", _legacy_generate_reports)
+
+    result = app._generate_reports_with_gallery_options(
+        [["2025-08-06", "Site A"] + [""] * 12],
+        {},
+        "Civil",
+        185,
+        148,
+        5,
+        add_border=False,
+        show_photo_placeholders=True,
+    )
+
+    assert result == b"legacy-zip"
+    assert captured["kwargs"] == {"img_per_row": 2, "add_border": False}
