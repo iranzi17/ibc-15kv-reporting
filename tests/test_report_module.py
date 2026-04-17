@@ -107,6 +107,7 @@ def test_gallery_layout_name_prefers_portrait_plus_wide_for_mixed_pair():
 def test_compose_gallery_page_bytes_uses_full_gallery_width():
     page = report._compose_gallery_page_bytes(
         [PORTRAIT_PNG, LANDSCAPE_PNG],
+        captions=["Pole replacement in progress.", "Wide trench section ready for cable laying."],
         gallery_width_mm=185,
         wide_photo_height_mm=120,
         spacing_mm=5,
@@ -119,6 +120,31 @@ def test_compose_gallery_page_bytes_uses_full_gallery_width():
 
     with Image.open(BytesIO(page)) as image:
         assert image.size == (geometry["total_width_px"], expected_height)
+
+
+def test_generate_reports_accepts_image_caption_mapping():
+    rows = [_empty_row("Site A", "2025-08-06")]
+    uploaded = {("Site A", "2025-08-06"): [PORTRAIT_PNG, LANDSCAPE_PNG]}
+    captions = {("Site A", "2025-08-06"): ["Workers preparing pole access.", "Wide view of overhead line activity."]}
+
+    data = report.generate_reports(
+        rows,
+        uploaded,
+        "Civil",
+        185,
+        120,
+        5,
+        img_per_row=2,
+        add_border=False,
+        show_photo_placeholders=False,
+        image_caption_mapping=captions,
+    )
+
+    with zipfile.ZipFile(BytesIO(data)) as zf:
+        doc_bytes = zf.read(zf.namelist()[0])
+
+    document = Document(BytesIO(doc_bytes))
+    assert len(document.inline_shapes) == 3
 
 
 def test_generate_reports_adds_placeholder_images_when_enabled():

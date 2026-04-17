@@ -8,10 +8,13 @@ import mimetypes
 import os
 import textwrap
 from contextlib import nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from config import BASE_DIR
+from PIL import Image
 from sheets import (
     CACHE_FILE,
     append_rows_to_sheet,
@@ -41,6 +44,26 @@ RESEARCH_ASSISTANT_MESSAGES_KEY = "research_assistant_messages"
 RESEARCH_ASSISTANT_AUDIO_KEY = "research_assistant_audio"
 SHEET_ANALYST_RESULT_KEY = "sheet_analyst_result"
 SHEET_ANALYST_AUDIO_KEY = "sheet_analyst_audio"
+AI_MEMORY_STATE_KEY = "ai_memory_state"
+AI_IMAGE_CAPTIONS_KEY = "ai_image_captions"
+SELF_HEALING_RESULT_KEY = "self_healing_result"
+RUNTIME_ISSUES_KEY = "runtime_issues"
+SELF_HEALING_AUDIO_KEY = "self_healing_audio"
+
+AI_MEMORY_FILE = Path(os.environ.get("AI_MEMORY_FILE", str(BASE_DIR / "ai_memory_store.json")))
+RUNTIME_ISSUE_LIMIT = 25
+MAINTENANCE_ITEM_LIMIT = 50
+GUIDANCE_TARGETS = ["general", "converter", "captions", "research", "healing"]
+SELF_HEALING_ACTIONS = {
+    "clear_openai_chat": "Clear ChatGPT chat state",
+    "clear_converter_state": "Clear converter rows and chat",
+    "clear_uploaded_images": "Clear uploaded report photos",
+    "clear_photo_captions": "Clear cached AI photo captions",
+    "clear_sheet_cache": "Clear cached sheet data",
+    "reset_knowledge_base": "Reset knowledge-base search cache",
+    "clear_audio_cache": "Clear generated audio",
+    "clear_runtime_issues": "Clear runtime issue log",
+}
 
 PROJECT_KNOWLEDGE_FILE_TYPES = ["pdf", "txt", "md", "doc", "docx", "csv", "json", "xml"]
 CONTRACTOR_SUPPORTING_FILE_TYPES = [
@@ -147,6 +170,31 @@ def _safe_text_input(label: str, value: str = "", **kwargs) -> str:
     return value
 
 
+def _safe_text_area(label: str, value: str = "", **kwargs) -> str:
+    """Call st.text_area when available, falling back to the default value."""
+    text_area_fn = getattr(st, "text_area", None)
+    if callable(text_area_fn):
+        try:
+            return text_area_fn(label, value=value, **kwargs)
+        except TypeError:
+            return text_area_fn(label, value)
+    return value
+
+
+def _safe_selectbox(label: str, options: list[str], index: int = 0, **kwargs):
+    """Call st.selectbox when available, otherwise return the indexed option."""
+    selectbox_fn = getattr(st, "selectbox", None)
+    if callable(selectbox_fn):
+        try:
+            return selectbox_fn(label, options, index=index, **kwargs)
+        except TypeError:
+            return selectbox_fn(label, options, index)
+    if not options:
+        return None
+    safe_index = max(0, min(index, len(options) - 1))
+    return options[safe_index]
+
+
 def _safe_file_uploader(label: str, **kwargs):
     """Call st.file_uploader when available, otherwise return an empty upload result."""
     uploader_fn = getattr(st, "file_uploader", None)
@@ -207,6 +255,207 @@ def _safe_audio(data, **kwargs) -> None:
     audio_fn = getattr(st, "audio", None)
     if callable(audio_fn):
         audio_fn(data, **kwargs)
+
+
+def _utc_timestamp() -> str:
+    """Return an ISO timestamp in UTC."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _load_json_store(path: Path, default: dict[str, object]) -> dict[str, object]:
+    """Load a small JSON store with graceful fallback."""
+    try:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                merged = dict(default)
+                merged.update(payload)
+                return merged
+    except Exception:
+        pass
+    return dict(default)
+
+
+def _save_json_store(path: Path, payload: dict[str, object]) -> bool:
+    """Persist a small JSON store when the filesystem allows it."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def _default_ai_memory_state() -> dict[str, object]:
+    """Return the initial structure for persisted AI memory."""
+    return {
+        "saved_guidance": [],
+        "maintenance_backlog": [],
+        "runtime_issues": [],
+    }
+
+
+def _ai_memory_state() -> dict[str, object]:
+    """Return the current AI memory state from session or disk."""
+    cached = st.session_state.get(AI_MEMORY_STATE_KEY)
+    if isinstance(cached, dict):
+        return cached
+
+    state = _load_json_store(AI_MEMORY_FILE, _default_ai_memory_state())
+    st.session_state[AI_MEMORY_STATE_KEY] = state
+    return state
+
+
+def _persist_ai_memory_state() -> bool:
+    """Save the in-memory AI state to disk when possible."""
+    state = _ai_memory_state()
+    return _save_json_store(AI_MEMORY_FILE, state)
+
+
+def _saved_guidance_items() -> list[dict[str, object]]:
+    """Return saved reusable instructions."""
+    items = _ai_memory_state().get("saved_guidance", [])
+    return list(items) if isinstance(items, list) else []
+
+
+def _maintenance_backlog_items() -> list[dict[str, object]]:
+    """Return saved maintenance requests."""
+    items = _ai_memory_state().get("maintenance_backlog", [])
+    return list(items) if isinstance(items, list) else []
+
+
+def _runtime_issue_items() -> list[dict[str, object]]:
+    """Return recently recorded runtime issues."""
+    session_items = st.session_state.get(RUNTIME_ISSUES_KEY)
+    if isinstance(session_items, list):
+        return list(session_items)
+
+    persisted = _ai_memory_state().get("runtime_issues", [])
+    items = list(persisted) if isinstance(persisted, list) else []
+    st.session_state[RUNTIME_ISSUES_KEY] = items
+    return items
+
+
+def _save_saved_guidance_item(instruction: str, *, target: str, title: str = "") -> dict[str, object]:
+    """Persist one reusable instruction for later AI workflows."""
+    clean_instruction = str(instruction or "").strip()
+    if not clean_instruction:
+        raise ValueError("A reusable instruction is required before saving to AI memory.")
+
+    clean_target = target if target in GUIDANCE_TARGETS else "general"
+    item = {
+        "id": hashlib.sha256(f"{clean_target}|{clean_instruction}".encode("utf-8")).hexdigest()[:12],
+        "title": (title or clean_instruction[:80]).strip(),
+        "instruction": clean_instruction,
+        "target": clean_target,
+        "enabled": True,
+        "created_at": _utc_timestamp(),
+    }
+
+    state = _ai_memory_state()
+    items = state.setdefault("saved_guidance", [])
+    if not isinstance(items, list):
+        items = []
+        state["saved_guidance"] = items
+
+    for existing in items:
+        if isinstance(existing, dict) and existing.get("instruction") == clean_instruction and existing.get("target") == clean_target:
+            existing["enabled"] = True
+            existing["title"] = item["title"]
+            existing["updated_at"] = _utc_timestamp()
+            _persist_ai_memory_state()
+            return existing
+
+    items.append(item)
+    _persist_ai_memory_state()
+    return item
+
+
+def _delete_saved_guidance_item(item_id: str) -> None:
+    """Delete one reusable instruction by id."""
+    state = _ai_memory_state()
+    items = state.setdefault("saved_guidance", [])
+    if isinstance(items, list):
+        state["saved_guidance"] = [
+            item for item in items if not isinstance(item, dict) or str(item.get("id", "")) != item_id
+        ]
+    _persist_ai_memory_state()
+
+
+def _active_guidance_text(*targets: str) -> str:
+    """Return enabled reusable instructions for the requested targets."""
+    normalized_targets = set(targets) | {"general"}
+    instructions: list[str] = []
+    for item in _saved_guidance_items():
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("enabled", True)):
+            continue
+        target = str(item.get("target", "general") or "general")
+        if target not in normalized_targets:
+            continue
+        instruction = str(item.get("instruction", "") or "").strip()
+        if instruction:
+            instructions.append(f"- {instruction}")
+    return "\n".join(instructions).strip()
+
+
+def _save_maintenance_item(title: str, details: str, *, source: str = "manual") -> dict[str, object]:
+    """Persist one maintenance/backlog request."""
+    clean_title = str(title or "").strip()
+    clean_details = str(details or "").strip()
+    if not clean_title and not clean_details:
+        raise ValueError("A maintenance request needs a title or details.")
+
+    entry = {
+        "id": hashlib.sha256(f"{clean_title}|{clean_details}|{_utc_timestamp()}".encode("utf-8")).hexdigest()[:12],
+        "title": clean_title or clean_details[:80],
+        "details": clean_details,
+        "source": source,
+        "status": "open",
+        "created_at": _utc_timestamp(),
+    }
+
+    state = _ai_memory_state()
+    items = state.setdefault("maintenance_backlog", [])
+    if not isinstance(items, list):
+        items = []
+        state["maintenance_backlog"] = items
+    items.insert(0, entry)
+    state["maintenance_backlog"] = items[:MAINTENANCE_ITEM_LIMIT]
+    _persist_ai_memory_state()
+    return entry
+
+
+def _record_runtime_issue(area: str, message: str, *, details: str = "") -> None:
+    """Store a recent runtime issue for the self-healing workspace."""
+    entry = {
+        "area": str(area or "app").strip(),
+        "message": str(message or "").strip(),
+        "details": str(details or "").strip(),
+        "created_at": _utc_timestamp(),
+    }
+    if not entry["message"]:
+        return
+
+    issues = _runtime_issue_items()
+    issues.insert(0, entry)
+    trimmed = issues[:RUNTIME_ISSUE_LIMIT]
+    st.session_state[RUNTIME_ISSUES_KEY] = trimmed
+
+    state = _ai_memory_state()
+    state["runtime_issues"] = trimmed
+    _persist_ai_memory_state()
+
+
+def _clear_runtime_issues() -> None:
+    """Remove recorded runtime issues."""
+    st.session_state[RUNTIME_ISSUES_KEY] = []
+    state = _ai_memory_state()
+    state["runtime_issues"] = []
+    _persist_ai_memory_state()
 
 
 def _streamlit_secret(name: str, default: str = "") -> str:
@@ -556,6 +805,244 @@ def _extract_response_sources(response) -> list[dict[str, str]]:
     return _extract_web_search_sources(response) + _extract_file_search_sources(response)
 
 
+def _image_bytes_signature(images: list[bytes], *, guidance: str = "") -> str:
+    """Return a stable signature for image bytes plus caption guidance."""
+    digest = hashlib.sha256()
+    for image_bytes in images or []:
+        payload = bytes(image_bytes or b"")
+        digest.update(len(payload).to_bytes(8, "big", signed=False))
+        digest.update(hashlib.sha256(payload).digest())
+    digest.update(guidance.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _image_mime_type_from_bytes(image_bytes: bytes) -> str:
+    """Return a best-effort MIME type for raw image bytes."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image_format = str(image.format or "").lower()
+    except Exception:
+        return "image/jpeg"
+
+    return {
+        "png": "image/png",
+        "jpeg": "image/jpeg",
+        "jpg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "bmp": "image/bmp",
+        "tiff": "image/tiff",
+    }.get(image_format, "image/jpeg")
+
+
+def _photo_caption_cache() -> dict[str, object]:
+    """Return the session caption cache for uploaded site photos."""
+    return st.session_state.setdefault(AI_IMAGE_CAPTIONS_KEY, {})
+
+
+def _photo_caption_response_schema(expected_count: int) -> dict[str, object]:
+    """Return the JSON schema used for photo caption generation."""
+    return {
+        "type": "object",
+        "properties": {
+            "captions": {
+                "type": "array",
+                "minItems": expected_count,
+                "maxItems": expected_count,
+                "items": {
+                    "type": "string",
+                    "description": "A short factual site-photo caption.",
+                },
+            }
+        },
+        "required": ["captions"],
+        "additionalProperties": False,
+    }
+
+
+def _report_row_context_text(row: list[str] | tuple[str, ...]) -> str:
+    """Return a compact textual context block for one report row."""
+    padded = list(row) + [""] * max(0, len(REPORT_HEADERS) - len(row))
+    padded = padded[: len(REPORT_HEADERS)]
+    mapping = {header: str(value or "").strip() for header, value in zip(REPORT_HEADERS, padded)}
+    return textwrap.dedent(
+        f"""
+        Date: {mapping.get("Date", "")}
+        Site: {mapping.get("Site_Name", "")}
+        District: {mapping.get("District", "")}
+        Work: {mapping.get("Work", "")}
+        Work executed: {mapping.get("Work_Executed", "")}
+        Comment on work: {mapping.get("Comment_on_work", "")}
+        Comment on HSE: {mapping.get("Comment_on_HSE", "")}
+        Challenges: {mapping.get("challenges", "")}
+        """
+    ).strip()
+
+
+def _request_image_captions_with_openai(
+    images: list[bytes],
+    *,
+    api_key: str,
+    model: str,
+    discipline: str,
+    report_row: list[str] | tuple[str, ...],
+    persistent_guidance: str = "",
+) -> list[str]:
+    """Generate short site-photo captions using OpenAI vision."""
+    from openai import OpenAI
+
+    if not images:
+        return []
+
+    client = OpenAI(api_key=api_key)
+    instructions = textwrap.dedent(
+        f"""
+        You are writing short captions for {discipline.lower()} daily report photos.
+
+        Rules:
+        - Return JSON matching the schema exactly.
+        - Write one caption per image, in the same order as the images were provided.
+        - Keep captions factual, concise, and professional.
+        - Do not invent locations, equipment, hazards, or quantities not visible in the image or present in the report context.
+        - Prefer consultant-style phrasing and action-oriented wording.
+        - Each caption should usually be one sentence and under 18 words.
+        """
+    ).strip()
+
+    if persistent_guidance:
+        instructions = (
+            f"{instructions}\n\nSaved caption and reporting preferences:\n{persistent_guidance}"
+        )
+
+    content: list[dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                "Report context:\n"
+                f"{_report_row_context_text(report_row)}\n\n"
+                "Generate captions for the attached site photos."
+            ),
+        }
+    ]
+    for image_bytes in images:
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": _data_url_for_bytes(
+                    bytes(image_bytes or b""),
+                    mime_type=_image_mime_type_from_bytes(bytes(image_bytes or b"")),
+                ),
+            }
+        )
+
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=[{"role": "user", "content": content}],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "site_photo_captions",
+                "strict": True,
+                "schema": _photo_caption_response_schema(len(images)),
+            }
+        },
+        store=False,
+    )
+
+    payload_text = _extract_openai_output_text(response)
+    if not payload_text:
+        raise ValueError("OpenAI returned empty photo captions.")
+
+    payload = json.loads(payload_text)
+    captions = payload.get("captions", [])
+    if not isinstance(captions, list):
+        raise ValueError("OpenAI returned invalid photo captions.")
+    return [str(caption or "").strip() for caption in captions]
+
+
+def _request_self_healing_analysis_with_openai(
+    issue_text: str,
+    *,
+    api_key: str,
+    model: str,
+    recent_issues: list[dict[str, object]],
+    persistent_guidance: str = "",
+) -> dict[str, object]:
+    """Analyze an error or improvement idea and return safe healing guidance."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    action_names = list(SELF_HEALING_ACTIONS)
+    response_schema = {
+        "type": "object",
+        "properties": {
+            "assistant_message": {"type": "string"},
+            "recommended_actions": {
+                "type": "array",
+                "items": {"type": "string", "enum": action_names},
+            },
+            "reusable_instruction": {"type": "string"},
+            "maintenance_title": {"type": "string"},
+        },
+        "required": [
+            "assistant_message",
+            "recommended_actions",
+            "reusable_instruction",
+            "maintenance_title",
+        ],
+        "additionalProperties": False,
+    }
+
+    instructions = textwrap.dedent(
+        """
+        You are an app maintenance assistant for a Streamlit reporting system.
+
+        Rules:
+        - Diagnose the user's error or requested improvement succinctly.
+        - Recommend only safe recovery actions from the allowed list.
+        - If the user expresses a stable preference or reusable behavior, extract it into reusable_instruction.
+        - If the issue sounds like a longer-term app improvement, suggest a short maintenance_title.
+        - Do not claim that source code was changed automatically.
+        """
+    ).strip()
+
+    if persistent_guidance:
+        instructions = f"{instructions}\n\nSaved app preferences:\n{persistent_guidance}"
+
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=textwrap.dedent(
+            f"""
+            Recent runtime issues:
+            {json.dumps(recent_issues[:10], ensure_ascii=True, indent=2)}
+
+            User issue or improvement request:
+            {issue_text.strip()}
+            """
+        ).strip(),
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "self_healing_analysis",
+                "strict": True,
+                "schema": response_schema,
+            }
+        },
+        store=False,
+    )
+
+    payload_text = _extract_openai_output_text(response)
+    if not payload_text:
+        raise ValueError("OpenAI returned an empty self-healing analysis.")
+
+    payload = json.loads(payload_text)
+    if not isinstance(payload, dict):
+        raise ValueError("OpenAI returned an invalid self-healing analysis.")
+    return payload
+
+
 def _converter_response_options(
     *,
     allow_web_research: bool,
@@ -853,6 +1340,7 @@ def _request_structured_reports_with_openai(
     allow_web_research: bool = False,
     supporting_files: list[object] | None = None,
     knowledge_vector_store_id: str = "",
+    persistent_guidance: str = "",
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Turn raw contractor text into consultant-style report rows using OpenAI."""
     from openai import OpenAI
@@ -878,6 +1366,8 @@ def _request_structured_reports_with_openai(
         - If project knowledge files are available through file search, use them to improve terminology and consultant style without overriding the contractor facts.
         """
     ).strip()
+    if persistent_guidance:
+        instructions = f"{instructions}\n\nSaved reporting preferences:\n{persistent_guidance}"
 
     prompt_sections = []
     raw_text = raw_report_text.strip()
@@ -941,6 +1431,7 @@ def _request_refined_structured_reports_with_openai(
     allow_web_research: bool = False,
     supporting_files: list[object] | None = None,
     knowledge_vector_store_id: str = "",
+    persistent_guidance: str = "",
 ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
     """Apply user chat feedback to the converted consultant rows."""
     from openai import OpenAI
@@ -964,6 +1455,8 @@ def _request_refined_structured_reports_with_openai(
         - assistant_message should be concise and directly state what changed or why something could not be changed.
         """
     ).strip()
+    if persistent_guidance:
+        instructions = f"{instructions}\n\nSaved reporting preferences:\n{persistent_guidance}"
 
     request_text = textwrap.dedent(
         f"""
@@ -1038,6 +1531,7 @@ def _request_research_assistant_reply(
     conversation: list[dict[str, str]],
     allow_web_research: bool = False,
     knowledge_vector_store_id: str = "",
+    persistent_guidance: str = "",
 ) -> tuple[str, list[dict[str, str]]]:
     """Answer a research or standards question using web/file search when enabled."""
     from openai import OpenAI
@@ -1056,6 +1550,8 @@ def _request_research_assistant_reply(
         - Keep the response concise, concrete, and useful for field reporting decisions.
         """
     ).strip()
+    if persistent_guidance:
+        instructions = f"{instructions}\n\nSaved app preferences:\n{persistent_guidance}"
 
     request_text = textwrap.dedent(
         f"""
@@ -1223,6 +1719,213 @@ def _render_contractor_chat_message(message: dict[str, object]) -> None:
             _safe_markdown("\n".join(lines))
 
 
+def _render_ai_memory_panel() -> None:
+    """Render reusable AI instructions that persist across app usage."""
+    st.subheader("AI Memory")
+    _safe_caption(
+        "Save stable instructions here so the converter, captions, research assistant, and self-healing workspace can reuse them."
+    )
+
+    target = _safe_selectbox(
+        "Instruction target",
+        GUIDANCE_TARGETS,
+        index=0,
+        key="ai_memory_target",
+    )
+    instruction = _safe_text_area(
+        "Reusable instruction",
+        value="",
+        height=90,
+        key="ai_memory_instruction",
+        placeholder="Example: Keep consultant comments short and formal. Do not repeat schedule wording unless the source mentions it.",
+    ).strip()
+
+    save_col, clear_col = _safe_columns(2, gap="large")
+    with save_col:
+        save_clicked = st.button("Save to AI memory")
+    with clear_col:
+        clear_input_clicked = st.button("Clear memory input")
+
+    if clear_input_clicked:
+        st.session_state["ai_memory_instruction"] = ""
+        _safe_rerun()
+
+    if save_clicked:
+        try:
+            item = _save_saved_guidance_item(
+                instruction,
+                target=str(target or "general"),
+            )
+        except Exception as exc:
+            st.warning(f"Unable to save AI memory instruction: {exc}")
+            _record_runtime_issue("ai_memory", "Failed to save reusable instruction.", details=str(exc))
+        else:
+            st.success(f"Saved reusable instruction for {item.get('target', 'general')}.")
+            st.session_state["ai_memory_instruction"] = ""
+            _safe_rerun()
+
+    items = _saved_guidance_items()
+    if not items:
+        _safe_caption("No reusable instructions saved yet.")
+        return
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "") or "Untitled instruction").strip()
+        target = str(item.get("target", "general") or "general").strip()
+        created = str(item.get("created_at", "") or "").strip()
+        _safe_markdown(f"**{title}**")
+        _safe_caption(f"Target: {target} | Saved: {created}")
+        _safe_write(str(item.get("instruction", "") or ""))
+        if st.button(
+            f"Delete {item.get('id', '')}",
+            key=f"delete_ai_memory_{item.get('id', '')}",
+        ):
+            _delete_saved_guidance_item(str(item.get("id", "") or ""))
+            _safe_rerun()
+
+
+def _render_self_healing_workspace() -> None:
+    """Render diagnostics, issue logging, and safe recovery actions."""
+    st.subheader("Self-Healing & Improvement Lab")
+    _safe_caption(
+        "This workspace can diagnose problems, apply safe session-level recovery actions, save reusable preferences, and store longer-term improvement requests."
+    )
+
+    diagnostics = {
+        "openai_sdk_ready": _openai_sdk_ready()[0],
+        "openai_key_loaded": bool(_load_openai_api_key()),
+        "saved_guidance_count": len(_saved_guidance_items()),
+        "runtime_issue_count": len(_runtime_issue_items()),
+        "uploaded_photo_groups": len(st.session_state.get("images", {}) or {}),
+        "caption_cache_entries": len(st.session_state.get(AI_IMAGE_CAPTIONS_KEY, {}) or {}),
+        "knowledge_base_cached": bool(st.session_state.get(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY)),
+    }
+    _safe_write(diagnostics)
+
+    issues = _runtime_issue_items()
+    if issues:
+        _safe_markdown("**Recent runtime issues**")
+        for issue in issues[:5]:
+            if not isinstance(issue, dict):
+                continue
+            _safe_write(
+                f"[{issue.get('area', 'app')}] {issue.get('message', '')} ({issue.get('created_at', '')})"
+            )
+
+    recovery_actions = list(SELF_HEALING_ACTIONS.items())
+    for label, action in [
+        ("Clear Chat State", "clear_openai_chat"),
+        ("Reset Converter", "clear_converter_state"),
+        ("Clear Uploaded Photos", "clear_uploaded_images"),
+        ("Clear Caption Cache", "clear_photo_captions"),
+        ("Clear Sheet Cache", "clear_sheet_cache"),
+        ("Reset Knowledge Cache", "reset_knowledge_base"),
+        ("Clear Audio Cache", "clear_audio_cache"),
+        ("Clear Issue Log", "clear_runtime_issues"),
+    ]:
+        if st.button(label, key=f"self_heal_{action}"):
+            _apply_self_healing_actions([action])
+            st.success(f"Applied: {SELF_HEALING_ACTIONS[action]}")
+            _safe_rerun()
+
+    request_text = _safe_text_area(
+        "Error or improvement request",
+        value="",
+        height=120,
+        key="self_healing_request",
+        placeholder="Paste an error message, traceback, or describe an improvement you want the app to remember.",
+    ).strip()
+
+    analyze_col, backlog_col = _safe_columns(2, gap="large")
+    with analyze_col:
+        analyze_clicked = st.button("Analyze with ChatGPT")
+    with backlog_col:
+        backlog_clicked = st.button("Save request to backlog")
+
+    if backlog_clicked:
+        try:
+            entry = _save_maintenance_item("User improvement request", request_text, source="self_healing")
+        except Exception as exc:
+            st.warning(f"Unable to save backlog item: {exc}")
+            _record_runtime_issue("self_healing", "Failed to save backlog item.", details=str(exc))
+        else:
+            st.success(f"Saved backlog item: {entry.get('title', '')}")
+
+    if analyze_clicked:
+        try:
+            if not request_text:
+                raise ValueError("Enter an error or improvement request before running analysis.")
+
+            api_key = _load_openai_api_key()
+            if not api_key:
+                raise ValueError("OpenAI API key is required for self-healing analysis.")
+
+            sdk_ready, sdk_error = _openai_sdk_ready()
+            if not sdk_ready:
+                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+
+            result = _request_self_healing_analysis_with_openai(
+                request_text,
+                api_key=api_key,
+                model=_default_openai_model(),
+                recent_issues=issues,
+                persistent_guidance=_active_guidance_text("healing"),
+            )
+        except Exception as exc:
+            st.warning(f"Self-healing analysis failed: {exc}")
+            _record_runtime_issue("self_healing", "Self-healing analysis failed.", details=str(exc))
+        else:
+            st.session_state[SELF_HEALING_RESULT_KEY] = result
+
+    result = st.session_state.get(SELF_HEALING_RESULT_KEY, {})
+    if isinstance(result, dict) and result:
+        _safe_markdown("**Self-healing analysis**")
+        _safe_write(str(result.get("assistant_message", "") or ""))
+
+        recommended_actions = result.get("recommended_actions", [])
+        if isinstance(recommended_actions, list) and recommended_actions:
+            lines = ["Recommended safe actions:"]
+            for action in recommended_actions:
+                action_name = str(action or "").strip()
+                if action_name in SELF_HEALING_ACTIONS:
+                    lines.append(f"- {SELF_HEALING_ACTIONS[action_name]}")
+            if len(lines) > 1:
+                _safe_markdown("\n".join(lines))
+            if st.button("Apply recommended safe actions"):
+                applied = _apply_self_healing_actions([str(action or "").strip() for action in recommended_actions])
+                if applied:
+                    st.success("Applied recommended safe actions.")
+                    _safe_rerun()
+
+        reusable_instruction = str(result.get("reusable_instruction", "") or "").strip()
+        if reusable_instruction:
+            _safe_markdown("**Suggested reusable instruction**")
+            _safe_write(reusable_instruction)
+            if st.button("Save suggested instruction to AI memory"):
+                _save_saved_guidance_item(reusable_instruction, target="general")
+                st.success("Saved suggested instruction.")
+                _safe_rerun()
+
+        maintenance_title = str(result.get("maintenance_title", "") or "").strip()
+        if maintenance_title:
+            if st.button("Add suggested maintenance item"):
+                _save_maintenance_item(maintenance_title, request_text, source="self_healing")
+                st.success("Added suggested maintenance item.")
+
+    backlog = _maintenance_backlog_items()
+    if backlog:
+        _safe_markdown("**Saved backlog**")
+        for item in backlog[:6]:
+            if not isinstance(item, dict):
+                continue
+            _safe_write(f"[{item.get('status', 'open')}] {item.get('title', '')}")
+            details = str(item.get("details", "") or "").strip()
+            if details:
+                _safe_caption(details)
+
+
 def _persist_parsed_contractor_rows(
     rows: list[dict[str, str]],
     *,
@@ -1274,6 +1977,7 @@ def _generate_reports_with_gallery_options(
     *,
     add_border: bool,
     show_photo_placeholders: bool,
+    image_caption_mapping: dict | None = None,
 ):
     """Call report generation with backwards-compatible gallery options."""
     base_args = (
@@ -1294,11 +1998,108 @@ def _generate_reports_with_gallery_options(
             *base_args,
             **base_kwargs,
             show_photo_placeholders=show_photo_placeholders,
+            image_caption_mapping=image_caption_mapping,
         )
     except TypeError as exc:
-        if "show_photo_placeholders" not in str(exc):
+        if "show_photo_placeholders" not in str(exc) and "image_caption_mapping" not in str(exc):
             raise
         return generate_reports(*base_args, **base_kwargs)
+
+
+def _build_review_row_mapping(review_rows: list[list[str]]) -> dict[tuple[str, str], list[str]]:
+    """Map site/date pairs to the edited review rows used for report generation."""
+    mapping: dict[tuple[str, str], list[str]] = {}
+    for row in review_rows:
+        padded = (list(row) + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)]
+        key = (str(padded[1] or "").strip(), str(padded[0] or "").strip())
+        if all(key):
+            mapping[key] = padded
+    return mapping
+
+
+def _generate_ai_photo_captions_for_reports(
+    review_rows: list[list[str]],
+    image_mapping: dict[tuple[str, str], list[bytes]],
+    *,
+    api_key: str,
+    model: str,
+    discipline: str,
+) -> dict[tuple[str, str], list[str]]:
+    """Generate or reuse AI captions for uploaded report photos."""
+    caption_guidance = _active_guidance_text("captions", "converter")
+    cache = _photo_caption_cache()
+    row_mapping = _build_review_row_mapping(review_rows)
+    caption_mapping: dict[tuple[str, str], list[str]] = {}
+
+    for key, images in image_mapping.items():
+        normalized_key = (str(key[0]).strip(), str(key[1]).strip())
+        if normalized_key not in row_mapping or not images:
+            continue
+
+        signature = _image_bytes_signature(images, guidance=caption_guidance)
+        cache_key = f"{normalized_key[0]}|{normalized_key[1]}"
+        cached = cache.get(cache_key, {})
+        if isinstance(cached, dict) and cached.get("signature") == signature:
+            captions = cached.get("captions", [])
+            if isinstance(captions, list):
+                caption_mapping[normalized_key] = [str(item or "").strip() for item in captions]
+                continue
+
+        captions = _request_image_captions_with_openai(
+            images,
+            api_key=api_key,
+            model=model,
+            discipline=discipline,
+            report_row=row_mapping[normalized_key],
+            persistent_guidance=caption_guidance,
+        )
+        cache[cache_key] = {
+            "signature": signature,
+            "captions": captions,
+            "created_at": _utc_timestamp(),
+        }
+        caption_mapping[normalized_key] = captions
+
+    st.session_state[AI_IMAGE_CAPTIONS_KEY] = cache
+    return caption_mapping
+
+
+def _clear_photo_caption_cache() -> None:
+    """Remove cached AI image captions."""
+    st.session_state.pop(AI_IMAGE_CAPTIONS_KEY, None)
+
+
+def _clear_ai_audio_cache() -> None:
+    """Remove cached audio outputs generated by AI features."""
+    st.session_state.pop(RESEARCH_ASSISTANT_AUDIO_KEY, None)
+    st.session_state.pop(SHEET_ANALYST_AUDIO_KEY, None)
+    st.session_state.pop(SELF_HEALING_AUDIO_KEY, None)
+
+
+def _apply_self_healing_actions(actions: list[str]) -> list[str]:
+    """Apply safe maintenance actions inside the running app session."""
+    applied: list[str] = []
+    for action in actions:
+        if action == "clear_openai_chat":
+            _clear_openai_chat()
+        elif action == "clear_converter_state":
+            _clear_parsed_contractor_rows()
+        elif action == "clear_uploaded_images":
+            st.session_state.pop("images", None)
+        elif action == "clear_photo_captions":
+            _clear_photo_caption_cache()
+        elif action == "clear_sheet_cache":
+            _clear_cached_sheet_data()
+        elif action == "reset_knowledge_base":
+            st.session_state.pop(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY, None)
+        elif action == "clear_audio_cache":
+            _clear_ai_audio_cache()
+        elif action == "clear_runtime_issues":
+            _clear_runtime_issues()
+        else:
+            continue
+        applied.append(action)
+    return applied
 
 
 def _render_project_knowledge_base_panel() -> list[object]:
@@ -1407,6 +2208,7 @@ def _render_openai_chat_panel() -> None:
             except Exception as exc:
                 messages.pop()
                 st.error(f"OpenAI request failed: {exc}")
+                _record_runtime_issue("chat_assistant", "ChatGPT assistant request failed.", details=str(exc))
             else:
                 messages.append({"role": "assistant", "content": reply_text})
                 if response_id:
@@ -1468,6 +2270,9 @@ def _render_contractor_parser(
         _safe_caption(
             "Project knowledge base is available to the converter for internal wording, standards, and approved-report style."
         )
+    converter_guidance = _active_guidance_text("converter")
+    if converter_guidance:
+        _safe_caption("Saved converter instructions are active for this workflow.")
 
     allow_web_research = _safe_checkbox(
         "Allow web research in converter chat",
@@ -1500,6 +2305,7 @@ def _render_contractor_parser(
                 )
         except Exception as exc:
             st.warning(f"Voice transcription failed: {exc}")
+            _record_runtime_issue("converter", "Voice transcription failed.", details=str(exc))
         else:
             existing_text = str(st.session_state.get("contractor_report_text", "") or "").strip()
             merged_text = f"{existing_text}\n\n{transcript}".strip() if existing_text else transcript
@@ -1540,9 +2346,11 @@ def _render_contractor_parser(
                     allow_web_research=allow_web_research,
                     supporting_files=supporting_files,
                     knowledge_vector_store_id=knowledge_vector_store_id,
+                    persistent_guidance=converter_guidance,
                 )
         except Exception as exc:
             st.warning(f"ChatGPT conversion failed: {exc}")
+            _record_runtime_issue("converter", "ChatGPT conversion failed.", details=str(exc))
         else:
             _persist_parsed_contractor_rows(
                 parsed_rows,
@@ -1618,6 +2426,7 @@ def _render_contractor_parser(
                     _clear_cached_sheet_data()
                 except Exception as exc:
                     st.error(f"Failed to append converted rows to Google Sheet: {exc}")
+                    _record_runtime_issue("converter", "Failed to append converted rows to Google Sheet.", details=str(exc))
                 else:
                     st.success(f"Added {len(edited_rows)} row(s) to Google Sheet.")
                     _safe_rerun()
@@ -1663,9 +2472,11 @@ def _render_contractor_parser(
                     allow_web_research=allow_web_research,
                     supporting_files=supporting_files,
                     knowledge_vector_store_id=knowledge_vector_store_id,
+                    persistent_guidance=converter_guidance,
                 )
         except Exception as exc:
             st.warning(f"ChatGPT refinement failed: {exc}")
+            _record_runtime_issue("converter", "ChatGPT refinement failed.", details=str(exc))
         else:
             _append_contractor_chat_message("user", refinement_prompt)
             _append_contractor_chat_message(
@@ -1695,10 +2506,13 @@ def _render_ai_research_workspace(
             value=True,
             key="research_assistant_web_research",
         )
+        research_guidance = _active_guidance_text("research")
         if knowledge_files:
             _safe_caption("The uploaded project knowledge base will be searched when relevant.")
         else:
             _safe_caption("Upload knowledge files above if you want the assistant to search project-specific documents.")
+        if research_guidance:
+            _safe_caption("Saved research instructions are active.")
 
         research_messages = st.session_state.setdefault(RESEARCH_ASSISTANT_MESSAGES_KEY, [])
         for message in research_messages:
@@ -1757,9 +2571,11 @@ def _render_ai_research_workspace(
                         conversation=research_messages,
                         allow_web_research=allow_web_research,
                         knowledge_vector_store_id=knowledge_vector_store_id,
+                        persistent_guidance=research_guidance,
                     )
             except Exception as exc:
                 st.warning(f"Research assistant failed: {exc}")
+                _record_runtime_issue("research", "Research assistant failed.", details=str(exc))
             else:
                 research_messages.append({"role": "user", "content": research_question, "sources": []})
                 research_messages.append(
@@ -1804,6 +2620,7 @@ def _render_ai_research_workspace(
                     )
             except Exception as exc:
                 st.warning(f"Audio generation failed: {exc}")
+                _record_runtime_issue("research", "Research audio generation failed.", details=str(exc))
 
         research_audio = st.session_state.get(RESEARCH_ASSISTANT_AUDIO_KEY)
         if research_audio:
@@ -1872,6 +2689,7 @@ def _render_ai_research_workspace(
                     )
             except Exception as exc:
                 st.warning(f"Spreadsheet analysis failed: {exc}")
+                _record_runtime_issue("spreadsheet_analyst", "Spreadsheet analysis failed.", details=str(exc))
             else:
                 st.session_state[SHEET_ANALYST_RESULT_KEY] = {
                     "text": analysis_text,
@@ -1903,6 +2721,7 @@ def _render_ai_research_workspace(
                     )
             except Exception as exc:
                 st.warning(f"Audio generation failed: {exc}")
+                _record_runtime_issue("spreadsheet_analyst", "Spreadsheet analysis audio generation failed.", details=str(exc))
 
         analysis_result = st.session_state.get(SHEET_ANALYST_RESULT_KEY, {})
         analysis_text = str(analysis_result.get("text", "") or "").strip()
@@ -1973,6 +2792,8 @@ def run_app():
     _safe_markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
     _render_openai_chat_panel()
+    _render_ai_memory_panel()
+    _render_self_healing_workspace()
     project_knowledge_files = _render_project_knowledge_base_panel()
 
     _safe_markdown(
@@ -2009,6 +2830,10 @@ def run_app():
         "Show placeholder when no photos are available",
         value=False,
     )
+    auto_caption_images = st.sidebar.checkbox(
+        "Auto-caption uploaded photos with AI",
+        value=True,
+    )
     st.sidebar.caption(
         "The gallery is composed as a report collage: two upper slots and one wide lower slot, matching the report style."
     )
@@ -2019,11 +2844,16 @@ def run_app():
     st.sidebar.caption(
         "For two-photo sets, the renderer prefers the portrait-plus-wide layout shown in your reference output when the images support it."
     )
+    if auto_caption_images:
+        st.sidebar.caption(
+            "AI photo captions use the current report row context plus any saved caption instructions from AI Memory."
+        )
 
     data_rows, sites, data_error = _load_sheet_context()
 
     if data_error is not None:  # pragma: no cover - user notification
         st.error(f"Failed to load site data: {data_error}")
+        _record_runtime_issue("sheet_data", "Failed to load site data.", details=str(data_error))
         return
 
     container_fn = getattr(st, "container", None)
@@ -2095,6 +2925,7 @@ def run_app():
                 st.success("Cached data synced to Google Sheet.")
             except Exception as exc:  # pragma: no cover - user notification
                 st.error(f"Sync failed: {exc}")
+                _record_runtime_issue("sheet_sync", "Failed to sync cached data to Google Sheet.", details=str(exc))
 
     filtered_rows = [
         row
@@ -2146,6 +2977,14 @@ def run_app():
             key = (site.strip(), date.strip())
             st.session_state.setdefault("images", {})[key] = [f.read() for f in files]
             _safe_image(st.session_state["images"][key], width=220)
+            cached_captions = (st.session_state.get(AI_IMAGE_CAPTIONS_KEY, {}) or {}).get(
+                f"{key[0]}|{key[1]}",
+                {},
+            )
+            if isinstance(cached_captions, dict):
+                captions = cached_captions.get("captions", [])
+                if isinstance(captions, list) and captions:
+                    _safe_caption("AI captions: " + " | ".join(str(caption or "").strip() for caption in captions))
 
     _render_contractor_parser(discipline, knowledge_files=project_knowledge_files)
     _render_ai_research_workspace(discipline, knowledge_files=project_knowledge_files)
@@ -2157,17 +2996,46 @@ def run_app():
             st.warning("No data available for the selected sites and dates.")
             return
 
-        zip_bytes = _generate_reports_with_gallery_options(
-            review_rows,
-            st.session_state.get("images", {}),
-            discipline,
-            img_width_mm,
-            img_height_mm,
-            spacing_mm,
-            add_border=add_border,
-            show_photo_placeholders=show_photo_placeholders,
-        )
-        st.download_button("Download ZIP", zip_bytes, "reports.zip")
+        try:
+            image_mapping = st.session_state.get("images", {})
+            image_caption_mapping = None
+            if auto_caption_images and image_mapping:
+                api_key = _load_openai_api_key()
+                sdk_ready, sdk_error = _openai_sdk_ready()
+                if api_key and sdk_ready:
+                    try:
+                        with _safe_spinner("Generating AI photo captions..."):
+                            image_caption_mapping = _generate_ai_photo_captions_for_reports(
+                                review_rows,
+                                image_mapping,
+                                api_key=api_key,
+                                model=_default_openai_model(),
+                                discipline=discipline,
+                            )
+                    except Exception as exc:
+                        st.warning(f"Photo captions could not be generated. Reports will continue without them. {exc}")
+                        _record_runtime_issue("photo_captions", "AI photo caption generation failed.", details=str(exc))
+                elif not sdk_ready:
+                    st.warning(f"Photo captions skipped because the OpenAI SDK is unavailable. {sdk_error}")
+                else:
+                    st.warning("Photo captions skipped because no OpenAI API key is configured.")
+
+            zip_bytes = _generate_reports_with_gallery_options(
+                review_rows,
+                image_mapping,
+                discipline,
+                img_width_mm,
+                img_height_mm,
+                spacing_mm,
+                add_border=add_border,
+                show_photo_placeholders=show_photo_placeholders,
+                image_caption_mapping=image_caption_mapping,
+            )
+        except Exception as exc:
+            st.error(f"Failed to generate reports: {exc}")
+            _record_runtime_issue("report_generation", "Report generation failed.", details=str(exc))
+        else:
+            st.download_button("Download ZIP", zip_bytes, "reports.zip")
 
 
 if __name__ == "__main__":

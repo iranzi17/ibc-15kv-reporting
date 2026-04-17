@@ -35,13 +35,16 @@ the current browser session only.
 
 The Streamlit app now includes a broader OpenAI-powered workspace:
 
+- **AI Memory**: save reusable instructions so the converter, captions, research assistant, and maintenance workflows can reuse them without retyping.
 - **Project Knowledge Base**: upload standards, procedures, approved reports, or client instructions. The app uses OpenAI file search so the converter and research assistant can reference those documents.
 - **Contractor Report Converter**: convert not only pasted text, but also uploaded PDFs, spreadsheets, images, and site photos into the 14 consultant-report fields.
 - **Voice note transcription**: upload audio notes (`mp3`, `m4a`, `wav`, `webm`, etc.) and append the transcript directly into the contractor report text before conversion.
 - **Refinement chat**: continue chatting with the converter after the first conversion so it rewrites the rows directly from your instructions.
+- **AI photo captions**: when report photos are uploaded, the app can generate short captions from the image plus the report-row context and place them directly onto the report gallery.
 - **Research workspace**: ask standards, wording, compliance, or best-practice questions with optional web research and project-document search.
 - **Spreadsheet analyst**: upload CSV/XLSX/JSON/PDF data files and let OpenAI Code Interpreter inspect them for anomalies, totals, missing data, and progress insights.
 - **Readback audio**: generate spoken MP3 summaries for research answers and spreadsheet analysis.
+- **Self-healing workspace**: collect recent runtime issues, apply safe reset actions inside the session, analyze pasted errors with ChatGPT, and store improvement ideas in a maintenance backlog.
 
 Notes:
 

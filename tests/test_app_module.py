@@ -1,6 +1,7 @@
 import app
 import sys
 import types
+from pathlib import Path
 
 
 HEADERS = [
@@ -241,7 +242,7 @@ def test_run_app_generates_reports_when_button_clicked(monkeypatch):
 
     assert generated["rows"] == [sheet_rows[1]]
     assert st_stub.download_called is True
-    assert not st_stub.text_area_calls
+    assert "Paste contractor report text" not in st_stub.text_area_calls
 
 
 def test_load_openai_api_key_prefers_session_env_then_secrets(monkeypatch):
@@ -708,6 +709,86 @@ def test_request_text_to_speech_with_openai_returns_audio_bytes(monkeypatch):
     assert captured["response_format"] == "mp3"
 
 
+def test_save_saved_guidance_item_and_active_guidance_text(monkeypatch, tmp_path):
+    st_stub = types.SimpleNamespace(session_state={})
+    monkeypatch.setattr(app, "st", st_stub)
+    monkeypatch.setattr(app, "AI_MEMORY_FILE", tmp_path / "ai_memory.json")
+
+    item = app._save_saved_guidance_item("Keep consultant comments concise.", target="converter")
+
+    assert item["target"] == "converter"
+    assert "Keep consultant comments concise." in app._active_guidance_text("converter")
+    assert Path(app.AI_MEMORY_FILE).exists()
+
+
+def test_request_image_captions_with_openai_returns_captions(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(
+                output_text='{"captions": ["Crew excavating trench.", "Cable laying in progress."]}',
+            )
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    captions = app._request_image_captions_with_openai(
+        [b"img-1", b"img-2"],
+        api_key="test-key",
+        model="gpt-4o-mini",
+        discipline="Electrical",
+        report_row=["2025-08-06", "Site A"] + [""] * 12,
+        persistent_guidance="- Keep captions short.",
+    )
+
+    assert captions == ["Crew excavating trench.", "Cable laying in progress."]
+    assert captured["api_key"] == "test-key"
+    assert captured["text"]["format"]["type"] == "json_schema"
+    assert len(captured["input"][0]["content"]) == 3
+
+
+def test_request_self_healing_analysis_with_openai_returns_actions(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(
+                output_text=(
+                    '{"assistant_message": "Clear the photo caption cache and retry.", '
+                    '"recommended_actions": ["clear_photo_captions"], '
+                    '"reusable_instruction": "Use shorter image captions.", '
+                    '"maintenance_title": "Improve caption retry handling"}'
+                ),
+            )
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    result = app._request_self_healing_analysis_with_openai(
+        "Photo captions are failing.",
+        api_key="test-key",
+        model="gpt-4o-mini",
+        recent_issues=[{"area": "photo_captions", "message": "Caption generation failed."}],
+        persistent_guidance="- Keep the app stable.",
+    )
+
+    assert result["recommended_actions"] == ["clear_photo_captions"]
+    assert result["maintenance_title"] == "Improve caption retry handling"
+    assert captured["api_key"] == "test-key"
+    assert captured["text"]["format"]["type"] == "json_schema"
+
+
 def test_generate_reports_with_gallery_options_passes_new_gallery_flag(monkeypatch):
     captured = {}
 
@@ -727,12 +808,14 @@ def test_generate_reports_with_gallery_options_passes_new_gallery_flag(monkeypat
         5,
         add_border=True,
         show_photo_placeholders=False,
+        image_caption_mapping={("Site A", "2025-08-06"): ["Caption 1"]},
     )
 
     assert result == b"zip-bytes"
     assert captured["kwargs"]["img_per_row"] == 2
     assert captured["kwargs"]["add_border"] is True
     assert captured["kwargs"]["show_photo_placeholders"] is False
+    assert captured["kwargs"]["image_caption_mapping"] == {("Site A", "2025-08-06"): ["Caption 1"]}
 
 
 def test_generate_reports_with_gallery_options_falls_back_for_legacy_signature(monkeypatch):
@@ -756,6 +839,7 @@ def test_generate_reports_with_gallery_options_falls_back_for_legacy_signature(m
         5,
         add_border=False,
         show_photo_placeholders=True,
+        image_caption_mapping={("Site A", "2025-08-06"): ["Caption 1"]},
     )
 
     assert result == b"legacy-zip"

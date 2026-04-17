@@ -50,6 +50,8 @@ PLACEHOLDER_REPLACEMENTS = {
 EMPTY_GALLERY_MESSAGE = "No site photo was attached to the daily return."
 EXTRA_GALLERY_MESSAGE = "No additional site photo was attached."
 WIDE_GALLERY_MESSAGE = "No wide site photo was attached to the daily return."
+CAPTION_BACKGROUND_RGBA = (18, 18, 18, 175)
+CAPTION_TEXT_RGB = (255, 255, 255)
 
 
 def signatories_for_row(
@@ -385,11 +387,65 @@ def _draw_gallery_border(
     )
 
 
+def _draw_caption_overlay(
+    canvas: Image.Image,
+    box: tuple[int, int, int, int],
+    caption: str,
+) -> None:
+    """Draw a wrapped caption over the lower edge of a gallery slot."""
+
+    caption_text = str(caption or "").strip()
+    if not caption_text:
+        return
+
+    left, top, width, height = box
+    horizontal_padding = max(10, width // 30)
+    vertical_padding = max(8, height // 45)
+    font_size = max(16, min(width, height) // 16)
+    font = _load_gallery_font(font_size)
+
+    measure = ImageDraw.Draw(canvas)
+    wrapped = _wrap_text_by_pixels(
+        caption_text,
+        measure,
+        font,
+        max(1, width - (horizontal_padding * 2)),
+    )
+    bbox = measure.multiline_textbbox((0, 0), wrapped, font=font, spacing=6, align="left")
+    text_height = bbox[3] - bbox[1]
+
+    overlay_height = text_height + (vertical_padding * 2)
+    overlay_top = max(top, top + height - overlay_height - vertical_padding)
+
+    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    overlay_draw.rounded_rectangle(
+        (
+            left + horizontal_padding // 2,
+            overlay_top,
+            left + width - horizontal_padding // 2,
+            top + height - vertical_padding // 2,
+        ),
+        radius=max(8, min(width, height) // 35),
+        fill=CAPTION_BACKGROUND_RGBA,
+    )
+    overlay_draw.multiline_text(
+        (left + horizontal_padding, overlay_top + vertical_padding),
+        wrapped,
+        font=font,
+        fill=CAPTION_TEXT_RGB,
+        spacing=6,
+        align="left",
+    )
+    canvas.alpha_composite(overlay)
+
+
 def _paste_gallery_slot(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
     *,
     image_bytes: bytes | None,
+    caption: str = "",
     box: tuple[int, int, int, int],
     missing_message: str,
     failure_message: str,
@@ -409,7 +465,9 @@ def _paste_gallery_slot(
         failure_message=failure_message,
     )
     with Image.open(BytesIO(slot_bytes)) as slot_image:
-        canvas.paste(slot_image.convert("RGB"), (left, top))
+        canvas.paste(slot_image.convert("RGBA"), (left, top))
+
+    _draw_caption_overlay(canvas, box, caption)
 
     if add_border:
         _draw_gallery_border(draw, box)
@@ -445,6 +503,7 @@ def _gallery_layout_name(page_images: List[bytes]) -> str:
 def _compose_gallery_page_bytes(
     page_images: List[bytes],
     *,
+    captions: List[str] | None = None,
     gallery_width_mm: float,
     wide_photo_height_mm: float | None,
     spacing_mm: float,
@@ -471,7 +530,8 @@ def _compose_gallery_page_bytes(
     else:
         canvas_height_px = bottom_height_px if layout_name == "single_wide" else top_height_px
 
-    canvas = Image.new("RGB", (total_width_px, canvas_height_px), "white")
+    page_captions = list(captions or [])
+    canvas = Image.new("RGBA", (total_width_px, canvas_height_px), (255, 255, 255, 255))
     draw = ImageDraw.Draw(canvas)
 
     if layout_name == "empty":
@@ -479,6 +539,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=None,
+            caption="",
             box=boxes["wide"],
             missing_message=EMPTY_GALLERY_MESSAGE,
             failure_message="Unable to prepare the gallery placeholder.",
@@ -490,6 +551,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[0],
+            caption=page_captions[0] if len(page_captions) > 0 else "",
             box=boxes["top_left"],
             missing_message=_gallery_placeholder_message(1),
             failure_message="Unable to process site photo 1.",
@@ -500,6 +562,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[1],
+            caption=page_captions[1] if len(page_captions) > 1 else "",
             box=boxes["top_right"],
             missing_message=_gallery_placeholder_message(2),
             failure_message="Unable to process site photo 2.",
@@ -510,6 +573,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[2],
+            caption=page_captions[2] if len(page_captions) > 2 else "",
             box=boxes["bottom"],
             missing_message=WIDE_GALLERY_MESSAGE,
             failure_message="Unable to process site photo 3.",
@@ -521,6 +585,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[0],
+            caption=page_captions[0] if len(page_captions) > 0 else "",
             box=boxes["top_left"],
             missing_message=_gallery_placeholder_message(1),
             failure_message="Unable to process site photo 1.",
@@ -531,6 +596,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[1],
+            caption=page_captions[1] if len(page_captions) > 1 else "",
             box=boxes["bottom"],
             missing_message=WIDE_GALLERY_MESSAGE,
             failure_message="Unable to process site photo 2.",
@@ -542,6 +608,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[0],
+            caption=page_captions[0] if len(page_captions) > 0 else "",
             box=boxes["top_left"],
             missing_message=_gallery_placeholder_message(1),
             failure_message="Unable to process site photo 1.",
@@ -552,6 +619,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[1],
+            caption=page_captions[1] if len(page_captions) > 1 else "",
             box=boxes["top_right"],
             missing_message=_gallery_placeholder_message(2),
             failure_message="Unable to process site photo 2.",
@@ -563,6 +631,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[0],
+            caption=page_captions[0] if len(page_captions) > 0 else "",
             box=boxes["top_left"],
             missing_message=_gallery_placeholder_message(1),
             failure_message="Unable to process site photo 1.",
@@ -574,6 +643,7 @@ def _compose_gallery_page_bytes(
             canvas,
             draw,
             image_bytes=page_images[0],
+            caption=page_captions[0] if len(page_captions) > 0 else "",
             box=boxes["wide"],
             missing_message=EMPTY_GALLERY_MESSAGE,
             failure_message="Unable to process site photo 1.",
@@ -582,7 +652,7 @@ def _compose_gallery_page_bytes(
         )
 
     buffer = BytesIO()
-    canvas.save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    canvas.convert("RGB").save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
     return buffer.getvalue()
 
 
@@ -614,6 +684,7 @@ def generate_reports(
     img_per_row: int = 2,
     add_border: bool = False,
     show_photo_placeholders: bool = True,
+    image_caption_mapping: Optional[Dict[tuple, List[str]]] = None,
     template_path: str = TEMPLATE_PATH,
 ) -> bytes:
     """Create a ZIP archive of rendered DOCX reports."""
@@ -663,14 +734,17 @@ def generate_reports(
                     )
 
                 image_bytes = uploaded_image_mapping.get((site_name, date), []) or []
+                image_captions = (image_caption_mapping or {}).get((site_name, date), []) or []
                 gallery_groups = _gallery_page_groups(image_bytes)
                 if not gallery_groups and show_photo_placeholders:
                     gallery_groups = [[]]
 
                 images_subdoc = tpl.new_subdoc()
                 for index, gallery_group in enumerate(gallery_groups):
+                    caption_group = image_captions[index * 3 : (index + 1) * 3]
                     gallery_page_bytes = _compose_gallery_page_bytes(
                         gallery_group,
+                        captions=caption_group,
                         gallery_width_mm=gallery_width_mm,
                         wide_photo_height_mm=wide_photo_height_mm,
                         spacing_mm=spacing_mm,
