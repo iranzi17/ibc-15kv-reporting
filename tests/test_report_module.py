@@ -32,6 +32,21 @@ def _empty_row(site: str, date: str) -> list[str]:
     return [date, site] + [""] * 12
 
 
+def test_signatories_for_row_keeps_habimana_isaac_for_cabin_activity():
+    sign_info = report.signatories_for_row(
+        "Civil",
+        "KIBAGABAGA SMART CABIN",
+        "Cabin rehabilitation",
+        "Executed cabin works",
+        "",
+        "Progress on cabin works",
+    )
+
+    assert sign_info["Contractor_Name"] == "HABIMANA ISAAC"
+    assert sign_info["Contractor_Title"] == "Electrical Engineer"
+    assert sign_info["Contractor_Signature"] == "issac_habimana.jpg"
+
+
 def test_generate_reports_returns_zip():
     rows = [_empty_row("Site A", "2025-08-06")]
     uploaded = {}

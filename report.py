@@ -1,5 +1,4 @@
 import os
-import re
 import tempfile
 import zipfile
 from io import BytesIO
@@ -22,7 +21,7 @@ SIGNATORIES = {
         "Consultant_Name": "IRANZI Prince Jean Claude",
         "Consultant_Title": "Civil Engineer",
         "Consultant_Signature": "iranzi_prince_jean_claude.jpg",
-        "Contractor_Name": "Issac HABIMANA",
+        "Contractor_Name": "HABIMANA ISAAC",
         "Contractor_Title": "Electrical Engineer",
         "Contractor_Signature": "issac_habimana.jpg",
     },
@@ -30,7 +29,7 @@ SIGNATORIES = {
         "Consultant_Name": "Alexis IVUGIZA",
         "Consultant_Title": "Electrical Engineer",
         "Consultant_Signature": "alexis_ivugiza.jpg",
-        "Contractor_Name": "Issac HABIMANA",
+        "Contractor_Name": "HABIMANA ISAAC",
         "Contractor_Title": "Electrical Engineer",
         "Contractor_Signature": "issac_habimana.jpg",
     },
@@ -39,23 +38,6 @@ SIGNATORIES = {
 PLACEHOLDER_REPLACEMENTS = {
     "Reaction&amp;WayForword": "Reaction_and_WayForword",
 }
-
-CABIN_ACTIVITY_PATTERN = re.compile(r"\bcabin\b", re.IGNORECASE)
-CABIN_CONTRACTOR_OVERRIDE = {
-    "Contractor_Name": "Rutarindwa Olivier",
-    "Contractor_Title": "Civil Engineer",
-    # Resolver accepts stem and extension variants.
-    "Contractor_Signature": "rutalindwa_olivier",
-}
-
-
-def _normalized_text(value: object) -> str:
-    return str(value or "").strip()
-
-
-def row_mentions_cabin(*fields: object) -> bool:
-    """Return True when any activity field includes the word 'cabin'."""
-    return any(CABIN_ACTIVITY_PATTERN.search(_normalized_text(field)) for field in fields)
 
 
 def signatories_for_row(
@@ -66,19 +48,9 @@ def signatories_for_row(
     another_work_executed: str,
     comment_on_work: str,
 ) -> dict[str, str]:
-    """Get signatories, overriding contractor details for cabin activities."""
-    sign_info = dict(SIGNATORIES.get(discipline, {}))
-
-    if row_mentions_cabin(
-        site_name,
-        work,
-        work_executed,
-        another_work_executed,
-        comment_on_work,
-    ):
-        sign_info.update(CABIN_CONTRACTOR_OVERRIDE)
-
-    return sign_info
+    """Get the fixed signatory set for the given discipline."""
+    _ = (site_name, work, work_executed, another_work_executed, comment_on_work)
+    return dict(SIGNATORIES.get(discipline, {}))
 
 
 def safe_filename(s: str, max_len: int = 150) -> str:

@@ -19,7 +19,7 @@ from sheets import (
     get_unique_sites_and_dates,
     load_offline_cache,
 )
-from report import generate_reports, signatories_for_row
+from report import generate_reports
 from report_structuring import REPORT_HEADERS, clean_and_structure_report
 from ui import render_workwatch_header, set_background
 from ui_hero import render_hero
@@ -2083,25 +2083,6 @@ def run_app():
             (row + [""] * len(REPORT_HEADERS))[: len(REPORT_HEADERS)]
             for row in filtered_rows
         ]
-
-    cabin_rows = 0
-    for row in review_rows:
-        sign_info = signatories_for_row(
-            discipline,
-            row[1],
-            row[3],
-            row[6],
-            row[8],
-            row[7],
-        )
-        if sign_info.get("Contractor_Name") == "Rutarindwa Olivier":
-            cabin_rows += 1
-
-    if cabin_rows:
-        st.info(
-            f"{cabin_rows} report(s) include cabin activities. "
-            "Contractor representative is set to Rutarindwa Olivier (Civil Engineer)."
-        )
 
     structured_from_rows = _rows_to_structured_data(review_rows)
     if st.session_state.get("_structured_origin") != "manual":
