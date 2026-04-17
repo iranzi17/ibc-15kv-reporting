@@ -1,4 +1,5 @@
 import app
+import sys
 import types
 
 
@@ -248,3 +249,104 @@ def test_load_openai_api_key_prefers_session_env_then_secrets(monkeypatch):
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     assert app._load_openai_api_key() == "secret-key"
+
+
+def test_structured_report_rows_normalizes_wrapped_payload():
+    wrapped = {
+        "reports": [
+            {
+                "Date": "2024-04-01",
+                "Site_Name": "Site A",
+                "District": "Gasabo",
+                "Work": "Trenching",
+                "Human_Resources": "5 technicians",
+                "Supply": "",
+                "Work_Executed": "Excavated 50 m",
+                "Comment_on_work": "Good progress",
+                "Another_Work_Executed": "",
+                "Comment_on_HSE": "PPE compliant",
+                "Consultant_Recommandation": "Continue",
+                "Non_Compliant_work": "",
+                "Reaction_and_WayForword": "Proceed tomorrow",
+                "challenges": "Rain",
+            }
+        ]
+    }
+
+    rows = app._structured_report_rows(wrapped)
+
+    assert rows == wrapped["reports"]
+
+
+def test_validate_structured_rows_for_sheet_flags_missing_required_fields():
+    rows = [
+        {header: "" for header in app.REPORT_HEADERS},
+        {
+            "Date": "2024-04-01",
+            "Site_Name": "Site A",
+            "District": "",
+            "Work": "",
+            "Human_Resources": "",
+            "Supply": "",
+            "Work_Executed": "",
+            "Comment_on_work": "",
+            "Another_Work_Executed": "",
+            "Comment_on_HSE": "",
+            "Consultant_Recommandation": "",
+            "Non_Compliant_work": "",
+            "Reaction_and_WayForword": "",
+            "challenges": "",
+        },
+    ]
+
+    errors = app._validate_structured_rows_for_sheet(rows)
+
+    assert "Row 1 is missing required field(s): Date, Site_Name." in errors
+    assert "Row 1 has no report content beyond date and site." in errors
+    assert "Row 2 has no report content beyond date and site." in errors
+
+
+def test_request_structured_reports_with_openai_parses_schema_response(monkeypatch):
+    captured = {}
+
+    report = {
+        "Date": "2024-04-01",
+        "Site_Name": "Site A",
+        "District": "Gasabo",
+        "Work": "Cable trenching",
+        "Human_Resources": "8 workers",
+        "Supply": "Cables",
+        "Work_Executed": "Excavated and prepared route",
+        "Comment_on_work": "Progress acceptable",
+        "Another_Work_Executed": "",
+        "Comment_on_HSE": "No incident reported",
+        "Consultant_Recommandation": "Continue and maintain PPE compliance",
+        "Non_Compliant_work": "",
+        "Reaction_and_WayForword": "Proceed with cable laying next shift",
+        "challenges": "Light rain",
+    }
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(output_text=f'{{"reports": [{report!r}]}}'.replace("'", '"'))
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    rows = app._request_structured_reports_with_openai(
+        "Raw contractor text",
+        api_key="test-key",
+        model="gpt-4o-mini",
+        discipline="Electrical",
+    )
+
+    assert rows == [report]
+    assert captured["api_key"] == "test-key"
+    assert captured["model"] == "gpt-4o-mini"
+    assert captured["store"] is False
+    assert captured["text"]["format"]["type"] == "json_schema"

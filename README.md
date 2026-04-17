@@ -62,23 +62,100 @@ The app expects data in a Google Sheet named **Reports**. Columns **A** through
 **N** should have the following headings starting in row&nbsp;1. Use the exact
 names shown below so the app can map your data automatically:
 
-1. **Date** – The report date in `dd.mm.YYYY`, `dd/mm/YYYY`, or `YYYY-mm-dd`
+1. **Date** - The report date in `dd.mm.YYYY`, `dd/mm/YYYY`, or `YYYY-mm-dd`
    format.
-2. **Site_Name** – Name of the site.
-3. **District** – District or location of the site.
-4. **Work** – Summary of planned or ongoing work.
-5. **Human_Resources** – Staffing information for the day.
-6. **Supply** – Materials delivered or required.
-7. **Work_Executed** – Activities executed during the day.
-8. **Comment_on_work** – Additional notes about the work performed.
-9. **Another_Work_Executed** – Any supplementary tasks completed.
-10. **Comment_on_HSE** – Health, safety, and environment notes.
-11. **Consultant_Recommandation** – Recommendations from the consultant.
-12. **Non_Compliant_work** – Items that do not meet compliance expectations.
-13. **Reaction_and_WayForword** – Follow-up actions or responses (the template
-    previously labelled this column as “Reaction & Way Forward”).
-14. **challenges** – Issues encountered on site.
+2. **Site_Name** - Name of the site.
+3. **District** - District or location of the site.
+4. **Work** - Summary of planned or ongoing work.
+5. **Human_Resources** - Staffing information for the day.
+6. **Supply** - Materials delivered or required.
+7. **Work_Executed** - Activities executed during the day.
+8. **Comment_on_work** - Additional notes about the work performed.
+9. **Another_Work_Executed** - Any supplementary tasks completed.
+10. **Comment_on_HSE** - Health, safety, and environment notes.
+11. **Consultant_Recommandation** - Recommendations from the consultant.
+12. **Non_Compliant_work** - Items that do not meet compliance expectations.
+13. **Reaction_and_WayForword** - Follow-up actions or responses (the template
+    previously labelled this column as "Reaction & Way Forward").
+14. **challenges** - Issues encountered on site.
 
 The application reads rows starting from **A2** and expects the above order. If
 any columns are missing, empty strings will be substituted when generating
 reports.
+
+## Mobile/API entry point
+
+A lightweight FastAPI service in `api.py` lets a mobile client submit daily reports to the same Google Sheet. Start it with:
+
+```
+uvicorn api:app --reload --port 8000
+```
+
+Or on Windows:
+
+```
+run_mobile_api.bat
+```
+
+Use the same service-account JSON as the Streamlit app (set `GOOGLE_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS`).
+
+Endpoints:
+- `GET /health` to verify credentials
+- `GET /auth/config` returns whether email login is enabled/required
+- `POST /auth/request-code` sends a one-time email login code
+- `POST /auth/verify-code` exchanges the code for a session token
+- `GET /schema` returns the exact Google Sheet headers used by the app
+- `GET /sites` returns the site list from the sheet
+- `POST /reports` accepts the daily report payload
+- `POST /reports/export` returns a ZIP of generated DOCX reports for the requested site/date filters
+
+```
+{
+  "date": "2025-08-06",
+  "site_name": "Kigali 15kV Switch",
+  "district": "Kicukiro",
+  "work": "Trench excavation",
+  "human_resources": "5 technicians",
+  "supply": "Cables, poles",
+  "work_executed": "Excavated 120 m",
+  "comment_on_work": "No blockers",
+  "another_work_executed": "Cable pulling",
+  "comment_on_hse": "PPE compliant",
+  "consultant_recommandation": "Proceed with backfilling",
+  "non_compliant_work": "None",
+  "reaction_and_wayforword": "Continue tomorrow",
+  "challenges": "Rain"
+}
+```
+
+This keeps the service account on the server; the Android client only calls the API.
+
+Export example:
+
+```
+{
+  "discipline": "Electrical",
+  "sites": ["Kigali 15kV Switch"],
+  "dates": ["2025-08-06"]
+}
+```
+
+The export endpoint reuses the same report generator as Streamlit, so the mobile app can download report ZIPs without opening the Streamlit UI.
+
+Optional email login for the mobile app can be configured with:
+- `MOBILE_AUTH_REQUIRED=true` to require login before `GET /sites`, `POST /reports`, and `POST /reports/export`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_USE_TLS`
+- `MOBILE_LOGIN_CODE_TTL_MINUTES` and `MOBILE_SESSION_TTL_HOURS` to control code/session lifetime
+- `MOBILE_ALLOWED_EMAILS` or `MOBILE_ALLOWED_EMAIL_DOMAINS` to restrict who can sign in
+
+The Android app in `mobile/android-app/` now lets the user enter the API server URL inside the app, mirrors the 14 Google Sheet headers from `/schema`, and supports email-code login when the backend has it enabled.
+
+## Free public access without a card
+
+For zero-cost public access during early testing, use the Cloudflare Quick Tunnel flow in `DEPLOY_FREE.md`.
+
+Launcher files:
+- `run_mobile_public.bat`
+- `run_mobile_public.ps1`
+
+This keeps the Google credential on the computer running the API and gives the phone a temporary HTTPS URL. The URL changes each time the tunnel restarts, so this is suitable for testing and early internal use, not a final production deployment.

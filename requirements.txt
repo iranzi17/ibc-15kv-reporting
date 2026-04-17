@@ -9,3 +9,8 @@ docxcompose
 pillow
 google-api-python-client
 openpyxl
+fastapi
+uvicorn[standard]
+pydantic
+pytest
+httpx

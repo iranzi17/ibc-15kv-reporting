@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import os
 import re
 import shutil
@@ -35,6 +36,7 @@ OPENAI_API_KEY_SESSION_KEY = "openai_api_key"
 OPENAI_CHAT_MESSAGES_KEY = "openai_chat_messages"
 OPENAI_PREVIOUS_RESPONSE_ID_KEY = "openai_previous_response_id"
 OPENAI_MODEL_SESSION_KEY = "openai_model"
+PARSED_CONTRACTOR_REPORTS_KEY = "parsed_contractor_reports"
 
 
 def _safe_columns(*args, **kwargs):
@@ -262,6 +264,186 @@ def _request_openai_reply(prompt: str, *, api_key: str, model: str) -> tuple[str
     return reply_text, str(getattr(response, "id", "") or "")
 
 
+def _structured_report_rows(value: object) -> list[dict[str, str]]:
+    """Normalize one or many structured reports into a list of row dicts."""
+    if isinstance(value, dict):
+        if "reports" in value:
+            value = value.get("reports")
+        else:
+            value = [value]
+
+    if not isinstance(value, list):
+        raise ValueError("Structured report payload must be a report object or list of reports.")
+
+    normalized_rows: list[dict[str, str]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("Each structured report must be an object.")
+        normalized_rows.append(
+            {header: str(entry.get(header, "") or "").strip() for header in REPORT_HEADERS}
+        )
+
+    if not normalized_rows:
+        raise ValueError("No structured reports were produced.")
+
+    return normalized_rows
+
+
+def _structured_rows_to_sheet_rows(rows: list[dict[str, str]]) -> list[list[str]]:
+    """Convert normalized report dicts into Google Sheet row lists."""
+    return [[row.get(header, "").strip() for header in REPORT_HEADERS] for row in rows]
+
+
+def _structured_rows_to_dataframe(rows: list[dict[str, str]]) -> pd.DataFrame:
+    """Convert normalized rows into a dataframe in header order."""
+    return pd.DataFrame(_structured_rows_to_sheet_rows(rows), columns=REPORT_HEADERS)
+
+
+def _structured_rows_from_dataframe(df: pd.DataFrame) -> list[dict[str, str]]:
+    """Convert an edited dataframe back into normalized structured rows."""
+    return _structured_report_rows(_rows_to_structured_data(_normalized_review_rows(df)))
+
+
+def _validate_structured_rows_for_sheet(rows: list[dict[str, str]]) -> list[str]:
+    """Return validation errors for rows before appending them to Google Sheets."""
+    errors: list[str] = []
+    for idx, row in enumerate(rows, start=1):
+        missing = [field for field in ("Date", "Site_Name") if not row.get(field, "").strip()]
+        if missing:
+            errors.append(f"Row {idx} is missing required field(s): {', '.join(missing)}.")
+
+        content_fields = [field for field in REPORT_HEADERS if field not in {"Date", "Site_Name"}]
+        if not any(row.get(field, "").strip() for field in content_fields):
+            errors.append(f"Row {idx} has no report content beyond date and site.")
+
+    return errors
+
+
+def _consultant_report_response_schema() -> dict[str, object]:
+    """Return the JSON schema used for AI-powered consultant report extraction."""
+    field_descriptions = {
+        "Date": "The report date exactly as stated in the source text. Empty string if unknown.",
+        "Site_Name": "The site name or location name from the source text.",
+        "District": "District or geographic area if stated.",
+        "Work": "Planned or ongoing work scope for the day.",
+        "Human_Resources": "Short summary of manpower or team composition.",
+        "Supply": "Materials, equipment, or delivered items mentioned in the source text.",
+        "Work_Executed": "Main work executed, rewritten in concise consultant-report language.",
+        "Comment_on_work": "Consultant observation on progress, quality, blockers, or status.",
+        "Another_Work_Executed": "Secondary work executed during the day, if any.",
+        "Comment_on_HSE": "HSE observations, PPE, hazards, incidents, or safety status.",
+        "Consultant_Recommandation": "Consultant recommendation grounded in the source text.",
+        "Non_Compliant_work": "Any non-compliant or defective work explicitly indicated or strongly implied.",
+        "Reaction_and_WayForword": "Immediate follow-up action or next step grounded in the source text.",
+        "challenges": "Main constraints, delays, risks, or challenges mentioned.",
+    }
+
+    row_schema = {
+        "type": "object",
+        "properties": {
+            header: {
+                "type": "string",
+                "description": field_descriptions.get(header, header),
+            }
+            for header in REPORT_HEADERS
+        },
+        "required": REPORT_HEADERS,
+        "additionalProperties": False,
+    }
+
+    return {
+        "type": "object",
+        "properties": {
+            "reports": {
+                "type": "array",
+                "minItems": 1,
+                "items": row_schema,
+            }
+        },
+        "required": ["reports"],
+        "additionalProperties": False,
+    }
+
+
+def _request_structured_reports_with_openai(
+    raw_report_text: str,
+    *,
+    api_key: str,
+    model: str,
+    discipline: str,
+) -> list[dict[str, str]]:
+    """Turn raw contractor text into consultant-style report rows using OpenAI."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    instructions = textwrap.dedent(
+        f"""
+        You are an experienced consultant preparing a daily consultant report for {discipline.lower()} works.
+        Convert the contractor's raw report into one or more consultant daily report rows.
+
+        Rules:
+        - Return JSON that matches the schema exactly.
+        - Create multiple rows only when the input clearly contains multiple site/date reports.
+        - Rewrite in concise professional consultant language.
+        - Do not invent facts, names, quantities, dates, districts, or safety issues.
+        - If a field is missing or unclear, return an empty string.
+        - Keep Work_Executed factual and specific.
+        - Put consultant judgement in Comment_on_work, Comment_on_HSE, Consultant_Recommandation, Non_Compliant_work, and Reaction_and_WayForword only when grounded in the source text.
+        - If no grounded consultant recommendation exists, leave Consultant_Recommandation empty.
+        - Preserve site names and dates exactly as written when possible.
+        """
+    ).strip()
+
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=raw_report_text,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "consultant_daily_reports",
+                "strict": True,
+                "schema": _consultant_report_response_schema(),
+            }
+        },
+        store=False,
+    )
+
+    payload_text = _extract_openai_output_text(response)
+    if not payload_text:
+        raise ValueError("OpenAI returned an empty structured output.")
+
+    payload = json.loads(payload_text)
+    return _structured_report_rows(payload)
+
+
+def _persist_parsed_contractor_rows(rows: list[dict[str, str]]) -> None:
+    """Store parsed contractor rows in session state."""
+    normalized_rows = _structured_report_rows(rows)
+    st.session_state[PARSED_CONTRACTOR_REPORTS_KEY] = normalized_rows
+    st.session_state["structured_report_data"] = normalized_rows
+    st.session_state["_structured_origin"] = "manual"
+
+
+def _clear_parsed_contractor_rows() -> None:
+    """Remove parsed contractor rows from session state."""
+    st.session_state.pop(PARSED_CONTRACTOR_REPORTS_KEY, None)
+
+
+def _clear_cached_sheet_data() -> None:
+    """Clear cached sheet reads when supported by the current callable."""
+    clear_fn = getattr(get_sheet_data, "clear", None)
+    if callable(clear_fn):
+        clear_fn()
+
+
+def _safe_rerun() -> None:
+    """Trigger a Streamlit rerun when available."""
+    rerun_fn = getattr(st, "rerun", None)
+    if callable(rerun_fn):
+        rerun_fn()
+
+
 def _clear_openai_chat() -> None:
     """Reset the chat transcript and response threading state."""
     st.session_state[OPENAI_CHAT_MESSAGES_KEY] = []
@@ -356,6 +538,98 @@ def _render_openai_chat_panel() -> None:
     for message in messages:
         with _safe_chat_message(str(message.get("role", "assistant"))):
             _safe_write(message.get("content", ""))
+
+
+def _render_contractor_parser(discipline: str) -> None:
+    """Render the AI/local contractor-report conversion workflow."""
+    st.subheader("Contractor Report Converter")
+    _safe_caption(
+        "Paste raw contractor text, convert it into consultant daily report fields, review the result, then append it to Google Sheets."
+    )
+
+    enable_parser = _safe_checkbox(
+        "Enable contractor report conversion", value=False, key="enable_parser"
+    )
+
+    if not enable_parser:
+        return
+
+    raw_report_text = st.text_area(
+        "Paste contractor report text",
+        height=220,
+        key="contractor_report_text",
+    )
+
+    if st.button("Convert with ChatGPT"):
+        try:
+            if not raw_report_text or not raw_report_text.strip():
+                raise ValueError("Paste contractor report text before converting.")
+
+            api_key = _load_openai_api_key()
+            if not api_key:
+                raise ValueError("OpenAI API key is required for ChatGPT conversion.")
+
+            if not _openai_sdk_ready()[0]:
+                raise ValueError("OpenAI SDK is not installed in the active Streamlit environment.")
+
+            with _safe_spinner("Converting contractor report with ChatGPT..."):
+                parsed_rows = _request_structured_reports_with_openai(
+                    raw_report_text.strip(),
+                    api_key=api_key,
+                    model=_default_openai_model(),
+                    discipline=discipline,
+                )
+        except Exception as exc:
+            st.warning(f"ChatGPT conversion failed: {exc}")
+        else:
+            _persist_parsed_contractor_rows(parsed_rows)
+            st.success(f"ChatGPT produced {len(parsed_rows)} structured report row(s).")
+
+    if st.button("Use local parser"):
+        try:
+            parsed_rows = _structured_report_rows(clean_and_structure_report(raw_report_text))
+        except (TypeError, ValueError) as exc:
+            st.warning(f"Unable to structure report locally: {exc}")
+        else:
+            _persist_parsed_contractor_rows(parsed_rows)
+            st.success(f"Local parser produced {len(parsed_rows)} structured report row(s).")
+
+    if st.button("Clear parsed contractor result"):
+        _clear_parsed_contractor_rows()
+
+    parsed_rows = st.session_state.get(PARSED_CONTRACTOR_REPORTS_KEY, [])
+    if not parsed_rows:
+        return
+
+    st.subheader("Review Converted Consultant Rows")
+    _safe_caption(
+        "Edit the converted fields before appending to Google Sheets. Date and Site_Name must be filled."
+    )
+    parsed_df = _structured_rows_to_dataframe(_structured_report_rows(parsed_rows))
+    edited_df = _safe_data_editor(
+        parsed_df,
+        use_container_width=True,
+        hide_index=True,
+        key="parsed_contractor_reports_editor",
+    )
+    edited_rows = _structured_rows_from_dataframe(edited_df)
+    st.session_state[PARSED_CONTRACTOR_REPORTS_KEY] = edited_rows
+    st.session_state["structured_report_data"] = edited_rows
+
+    if st.button("Append Converted Rows to Google Sheet"):
+        validation_errors = _validate_structured_rows_for_sheet(edited_rows)
+        if validation_errors:
+            for error in validation_errors:
+                st.warning(error)
+        else:
+            try:
+                append_rows_to_sheet(_structured_rows_to_sheet_rows(edited_rows))
+                _clear_cached_sheet_data()
+            except Exception as exc:
+                st.error(f"Failed to append converted rows to Google Sheet: {exc}")
+            else:
+                st.success(f"Added {len(edited_rows)} row(s) to Google Sheet.")
+                _safe_rerun()
 
 
 def _load_sheet_context():
@@ -1062,21 +1336,7 @@ def run_app():
     else:
         st.info("No rows available for template preview.")
 
-    st.subheader("Contractor Report Parser")
-    enable_parser = _safe_checkbox(
-        "Enable manual contractor report parsing", value=False, key="enable_parser"
-    )
-
-    if enable_parser:
-        raw_report_text = st.text_area("Paste contractor report text")
-        if st.button("Clean & Structure Report"):
-            try:
-                structured_report = clean_and_structure_report(raw_report_text)
-            except (TypeError, ValueError) as exc:
-                st.warning(f"Unable to structure report: {exc}")
-            else:
-                st.session_state["structured_report_data"] = structured_report
-                st.session_state["_structured_origin"] = "manual"
+    _render_contractor_parser(discipline)
 
     st.json(st.session_state.get("structured_report_data", structured_from_rows))
 

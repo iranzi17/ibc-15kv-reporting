@@ -14,9 +14,13 @@ ENV/
 
 # Streamlit secrets
 .streamlit/secrets.toml
+service-account.json
+service_account.json
 
 # Packaging
 *.egg-info/
+dist/mobile-api.log
+dist/mobile-api-error.log
 
 # OS artifacts
 .DS_Store
