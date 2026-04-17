@@ -31,6 +31,24 @@ OPENAI_MODEL = "gpt-4o-mini"
 You can also paste the key into the ChatGPT settings panel inside the app for
 the current browser session only.
 
+## OpenAI Workflows In The App
+
+The Streamlit app now includes a broader OpenAI-powered workspace:
+
+- **Project Knowledge Base**: upload standards, procedures, approved reports, or client instructions. The app uses OpenAI file search so the converter and research assistant can reference those documents.
+- **Contractor Report Converter**: convert not only pasted text, but also uploaded PDFs, spreadsheets, images, and site photos into the 14 consultant-report fields.
+- **Voice note transcription**: upload audio notes (`mp3`, `m4a`, `wav`, `webm`, etc.) and append the transcript directly into the contractor report text before conversion.
+- **Refinement chat**: continue chatting with the converter after the first conversion so it rewrites the rows directly from your instructions.
+- **Research workspace**: ask standards, wording, compliance, or best-practice questions with optional web research and project-document search.
+- **Spreadsheet analyst**: upload CSV/XLSX/JSON/PDF data files and let OpenAI Code Interpreter inspect them for anomalies, totals, missing data, and progress insights.
+- **Readback audio**: generate spoken MP3 summaries for research answers and spreadsheet analysis.
+
+Notes:
+
+- File-search uploads are sent to OpenAI as temporary vector-store content when needed by the app.
+- Web research is optional and may increase latency and API cost.
+- Tool-heavy workflows automatically switch to a GPT-5 family model when your default model does not support the needed tool reliably.
+
 ## Configuration
 
 Application settings can be supplied through environment variables or by

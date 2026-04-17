@@ -115,6 +115,16 @@ class _StreamlitStub:
         return None
 
 
+class _UploadedFileStub:
+    def __init__(self, name, data, mime_type="application/octet-stream"):
+        self.name = name
+        self._data = data
+        self.type = mime_type
+
+    def getvalue(self):
+        return self._data
+
+
 def test_run_app_excludes_header_rows(monkeypatch):
     sheet_rows = [
         HEADERS,
@@ -178,10 +188,10 @@ def test_run_app_excludes_header_rows(monkeypatch):
         sheet_rows[2],
     ]
 
-    assert st_stub.uploader_labels == [
-        "Upload images for Site A - 2024-01-01",
-        "Upload images for Site B - 2024-01-02",
-    ]
+    assert "Upload project knowledge files" in st_stub.uploader_labels
+    assert "Upload spreadsheets or datasets" in st_stub.uploader_labels
+    assert "Upload images for Site A - 2024-01-01" in st_stub.uploader_labels
+    assert "Upload images for Site B - 2024-01-02" in st_stub.uploader_labels
 
     structured_report = st_stub.session_state.get("structured_report_data")
     assert isinstance(structured_report, list)
@@ -431,6 +441,10 @@ def test_converter_model_uses_gpt5_mini_for_web_research():
     assert app._converter_model("gpt-4o-mini", allow_web_research=True) == app.RESEARCH_OPENAI_MODEL
     assert app._converter_model("gpt-5.4", allow_web_research=True) == "gpt-5.4"
     assert app._converter_model("gpt-4o-mini", allow_web_research=False) == "gpt-4o-mini"
+    assert (
+        app._converter_model("gpt-4o-mini", allow_web_research=False, allow_file_search=True)
+        == app.RESEARCH_OPENAI_MODEL
+    )
 
 
 def test_extract_web_search_sources_deduplicates_items():
@@ -496,3 +510,199 @@ def test_request_structured_reports_with_openai_enables_web_search(monkeypatch):
     assert captured["tools"] == [{"type": "web_search"}]
     assert captured["tool_choice"] == "auto"
     assert captured["include"] == ["web_search_call.action.sources"]
+
+
+def test_uploaded_file_to_response_part_supports_image_and_file_inputs():
+    image_part = app._uploaded_file_to_response_part(
+        _UploadedFileStub("site.jpg", b"image-bytes", "image/jpeg")
+    )
+    file_part = app._uploaded_file_to_response_part(
+        _UploadedFileStub("report.pdf", b"pdf-bytes", "application/pdf")
+    )
+
+    assert image_part["type"] == "input_image"
+    assert image_part["image_url"].startswith("data:image/jpeg;base64,")
+    assert file_part["type"] == "input_file"
+    assert file_part["filename"] == "report.pdf"
+    assert file_part["file_data"].startswith("data:application/pdf;base64,")
+
+
+def test_request_transcription_with_openai_returns_joined_text(monkeypatch):
+    captured = {}
+
+    class _FakeTranscriptions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            captured["filename"] = kwargs["file"].name
+            return "Transcribed field note"
+
+    class _FakeAudio:
+        def __init__(self):
+            self.transcriptions = _FakeTranscriptions()
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.audio = _FakeAudio()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    transcript = app._request_transcription_with_openai(
+        [_UploadedFileStub("voice-note.m4a", b"audio-bytes", "audio/m4a")],
+        api_key="test-key",
+        discipline="Electrical",
+    )
+
+    assert "Transcribed field note" in transcript
+    assert captured["api_key"] == "test-key"
+    assert captured["model"] == app.TRANSCRIPTION_OPENAI_MODEL
+    assert captured["filename"] == "voice-note.m4a"
+
+
+def test_request_research_assistant_reply_collects_web_and_file_sources(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(
+                output_text="Use the approved HSE wording from the project document.",
+                output=[
+                    types.SimpleNamespace(
+                        type="file_search_call",
+                        results=[types.SimpleNamespace(filename="HSE Procedure.pdf", score=0.91)],
+                    ),
+                    types.SimpleNamespace(
+                        type="web_search_call",
+                        action=types.SimpleNamespace(
+                            sources=[types.SimpleNamespace(title="IEC guidance", url="https://example.com/iec")]
+                        ),
+                    ),
+                ],
+            )
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    reply, sources = app._request_research_assistant_reply(
+        api_key="test-key",
+        model="gpt-4o-mini",
+        discipline="Electrical",
+        question="Which wording should I use for HSE observations?",
+        conversation=[],
+        allow_web_research=True,
+        knowledge_vector_store_id="vs_123",
+    )
+
+    assert reply == "Use the approved HSE wording from the project document."
+    assert captured["api_key"] == "test-key"
+    assert captured["model"] == app.RESEARCH_OPENAI_MODEL
+    assert captured["tools"] == [
+        {"type": "web_search"},
+        {"type": "file_search", "vector_store_ids": ["vs_123"], "max_num_results": 5},
+    ]
+    assert sources == [
+        {"title": "IEC guidance", "url": "https://example.com/iec"},
+        {"title": "HSE Procedure.pdf", "url": "", "note": "Relevance 0.91"},
+    ]
+
+
+def test_request_spreadsheet_analysis_with_openai_uses_code_interpreter(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(
+                output_text="Site A has the highest progress and one missing date entry.",
+                output=[
+                    types.SimpleNamespace(
+                        type="message",
+                        content=[
+                            types.SimpleNamespace(
+                                annotations=[
+                                    types.SimpleNamespace(
+                                        type="container_file_citation",
+                                        container_id="cont_1",
+                                        file_id="file_1",
+                                        filename="progress-chart.png",
+                                    )
+                                ]
+                            )
+                        ],
+                    )
+                ],
+            )
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    analysis_text, artifacts = app._request_spreadsheet_analysis_with_openai(
+        api_key="test-key",
+        model="gpt-4o-mini",
+        uploaded_files=[
+            _UploadedFileStub(
+                "progress.xlsx",
+                b"spreadsheet-bytes",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        ],
+        question="Summarize the progress and anomalies.",
+    )
+
+    assert analysis_text == "Site A has the highest progress and one missing date entry."
+    assert captured["api_key"] == "test-key"
+    assert captured["model"] == app.RESEARCH_OPENAI_MODEL
+    assert captured["tools"] == [
+        {"type": "code_interpreter", "container": {"type": "auto", "memory_limit": "4g"}}
+    ]
+    assert captured["tool_choice"] == "required"
+    assert captured["input"][0]["content"][0]["type"] == "input_text"
+    assert captured["input"][0]["content"][1]["type"] == "input_file"
+    assert artifacts == [
+        {"container_id": "cont_1", "file_id": "file_1", "filename": "progress-chart.png"}
+    ]
+
+
+def test_request_text_to_speech_with_openai_returns_audio_bytes(monkeypatch):
+    captured = {}
+
+    class _FakeSpeechResponse:
+        def read(self):
+            return b"mp3-bytes"
+
+    class _FakeSpeech:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeSpeechResponse()
+
+    class _FakeAudio:
+        def __init__(self):
+            self.speech = _FakeSpeech()
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.audio = _FakeAudio()
+
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+
+    audio_bytes = app._request_text_to_speech_with_openai(
+        "Professional summary text",
+        api_key="test-key",
+        voice="coral",
+    )
+
+    assert audio_bytes == b"mp3-bytes"
+    assert captured["api_key"] == "test-key"
+    assert captured["model"] == app.TTS_OPENAI_MODEL
+    assert captured["voice"] == "coral"
+    assert captured["response_format"] == "mp3"

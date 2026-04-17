@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
 import json
+import mimetypes
 import os
 import textwrap
 from contextlib import nullcontext
@@ -24,12 +28,39 @@ st.set_page_config(page_title="WorkWatch - Site Intelligence", layout="wide")
 
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 RESEARCH_OPENAI_MODEL = "gpt-5.4-mini"
+TRANSCRIPTION_OPENAI_MODEL = "gpt-4o-transcribe"
+TTS_OPENAI_MODEL = "gpt-4o-mini-tts"
 OPENAI_API_KEY_SESSION_KEY = "openai_api_key"
 OPENAI_CHAT_MESSAGES_KEY = "openai_chat_messages"
 OPENAI_PREVIOUS_RESPONSE_ID_KEY = "openai_previous_response_id"
 OPENAI_MODEL_SESSION_KEY = "openai_model"
 PARSED_CONTRACTOR_REPORTS_KEY = "parsed_contractor_reports"
 CONTRACTOR_CHAT_MESSAGES_KEY = "contractor_converter_chat_messages"
+PROJECT_KNOWLEDGE_VECTOR_STORE_KEY = "project_knowledge_vector_store"
+RESEARCH_ASSISTANT_MESSAGES_KEY = "research_assistant_messages"
+RESEARCH_ASSISTANT_AUDIO_KEY = "research_assistant_audio"
+SHEET_ANALYST_RESULT_KEY = "sheet_analyst_result"
+SHEET_ANALYST_AUDIO_KEY = "sheet_analyst_audio"
+
+PROJECT_KNOWLEDGE_FILE_TYPES = ["pdf", "txt", "md", "doc", "docx", "csv", "json", "xml"]
+CONTRACTOR_SUPPORTING_FILE_TYPES = [
+    "pdf",
+    "txt",
+    "md",
+    "doc",
+    "docx",
+    "csv",
+    "json",
+    "xml",
+    "xlsx",
+    "xls",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+]
+AUDIO_FILE_TYPES = ["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"]
+ANALYST_FILE_TYPES = ["csv", "xlsx", "xls", "json", "pdf"]
 
 
 def _safe_columns(*args, **kwargs):
@@ -38,10 +69,26 @@ def _safe_columns(*args, **kwargs):
     if not callable(columns_fn):
         return (nullcontext(), nullcontext())
 
+    requested_count = None
+    if args:
+        first_arg = args[0]
+        if isinstance(first_arg, int):
+            requested_count = first_arg
+        elif isinstance(first_arg, (list, tuple)):
+            requested_count = len(first_arg)
+
     try:
-        return columns_fn(*args, **kwargs)
+        columns = columns_fn(*args, **kwargs)
     except TypeError:
-        return columns_fn(*args)
+        columns = columns_fn(*args)
+
+    if requested_count is None:
+        return columns
+
+    columns_list = list(columns)
+    while len(columns_list) < requested_count:
+        columns_list.append(nullcontext())
+    return tuple(columns_list)
 
 
 def _safe_markdown(markdown: str, **kwargs) -> None:
@@ -100,6 +147,16 @@ def _safe_text_input(label: str, value: str = "", **kwargs) -> str:
     return value
 
 
+def _safe_file_uploader(label: str, **kwargs):
+    """Call st.file_uploader when available, otherwise return an empty upload result."""
+    uploader_fn = getattr(st, "file_uploader", None)
+    if callable(uploader_fn):
+        return uploader_fn(label, **kwargs)
+    if kwargs.get("accept_multiple_files"):
+        return []
+    return None
+
+
 def _safe_write(value: object) -> None:
     """Call st.write when available."""
     write_fn = getattr(st, "write", None)
@@ -143,6 +200,13 @@ def _safe_spinner(text: str):
     if callable(spinner_fn):
         return spinner_fn(text)
     return nullcontext()
+
+
+def _safe_audio(data, **kwargs) -> None:
+    """Call st.audio when available."""
+    audio_fn = getattr(st, "audio", None)
+    if callable(audio_fn):
+        audio_fn(data, **kwargs)
 
 
 def _streamlit_secret(name: str, default: str = "") -> str:
@@ -204,6 +268,112 @@ def _openai_sdk_ready() -> tuple[bool, str]:
     return True, ""
 
 
+def _uploaded_file_name(uploaded_file: object) -> str:
+    """Return a best-effort filename for an uploaded file object."""
+    name = str(getattr(uploaded_file, "name", "") or "").strip()
+    return name or "upload.bin"
+
+
+def _uploaded_file_mime_type(uploaded_file: object) -> str:
+    """Return a MIME type for an uploaded file object."""
+    explicit_type = str(getattr(uploaded_file, "type", "") or "").strip()
+    if explicit_type:
+        return explicit_type
+
+    guessed_type, _ = mimetypes.guess_type(_uploaded_file_name(uploaded_file))
+    return guessed_type or "application/octet-stream"
+
+
+def _uploaded_file_bytes(uploaded_file: object) -> bytes:
+    """Read uploaded file bytes without permanently moving the file pointer."""
+    getvalue_fn = getattr(uploaded_file, "getvalue", None)
+    if callable(getvalue_fn):
+        data = getvalue_fn()
+        return bytes(data or b"")
+
+    read_fn = getattr(uploaded_file, "read", None)
+    if not callable(read_fn):
+        return b""
+
+    tell_fn = getattr(uploaded_file, "tell", None)
+    seek_fn = getattr(uploaded_file, "seek", None)
+    position = None
+    if callable(tell_fn):
+        try:
+            position = tell_fn()
+        except Exception:
+            position = None
+
+    data = read_fn()
+    if callable(seek_fn) and position is not None:
+        try:
+            seek_fn(position)
+        except Exception:
+            pass
+
+    return bytes(data or b"")
+
+
+def _data_url_for_bytes(data: bytes, *, mime_type: str) -> str:
+    """Return a data URL for binary content."""
+    encoded = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _uploaded_file_to_response_part(uploaded_file: object) -> dict[str, str] | None:
+    """Convert an uploaded file to a Responses API input part."""
+    data = _uploaded_file_bytes(uploaded_file)
+    if not data:
+        return None
+
+    filename = _uploaded_file_name(uploaded_file)
+    mime_type = _uploaded_file_mime_type(uploaded_file)
+    data_url = _data_url_for_bytes(data, mime_type=mime_type)
+
+    if mime_type.startswith("image/"):
+        return {
+            "type": "input_image",
+            "image_url": data_url,
+        }
+
+    return {
+        "type": "input_file",
+        "filename": filename,
+        "file_data": data_url,
+    }
+
+
+def _uploaded_files_signature(files: list[object]) -> str:
+    """Return a stable content signature for a list of uploaded files."""
+    digest = hashlib.sha256()
+    for uploaded_file in files:
+        filename = _uploaded_file_name(uploaded_file)
+        data = _uploaded_file_bytes(uploaded_file)
+        digest.update(filename.encode("utf-8"))
+        digest.update(len(data).to_bytes(8, "big", signed=False))
+        digest.update(hashlib.sha256(data).digest())
+    return digest.hexdigest()
+
+
+def _uploaded_file_names(files: list[object] | None) -> list[str]:
+    """Return non-empty filenames for uploaded files."""
+    return [_uploaded_file_name(uploaded_file) for uploaded_file in files or [] if uploaded_file]
+
+
+def _uploaded_files_to_response_input(
+    prompt_text: str,
+    *,
+    uploaded_files: list[object] | None = None,
+) -> list[dict[str, object]]:
+    """Build one multimodal user message for the Responses API."""
+    content: list[dict[str, str]] = [{"type": "input_text", "text": prompt_text.strip()}]
+    for uploaded_file in uploaded_files or []:
+        part = _uploaded_file_to_response_part(uploaded_file)
+        if part:
+            content.append(part)
+    return [{"role": "user", "content": content}]
+
+
 def _extract_openai_output_text(response) -> str:
     """Read the text output from an OpenAI Responses API object."""
     text = str(getattr(response, "output_text", "") or "").strip()
@@ -242,13 +412,33 @@ def _request_openai_reply(prompt: str, *, api_key: str, model: str) -> tuple[str
     return reply_text, str(getattr(response, "id", "") or "")
 
 
-def _converter_model(model: str, *, allow_web_research: bool) -> str:
-    """Return a model suitable for the contractor converter workflow."""
-    if not allow_web_research:
+def _tool_enabled_model(
+    model: str,
+    *,
+    allow_web_research: bool = False,
+    allow_file_search: bool = False,
+    allow_code_interpreter: bool = False,
+) -> str:
+    """Return a tool-capable model for workflows that need OpenAI tools."""
+    if not any((allow_web_research, allow_file_search, allow_code_interpreter)):
         return model
     if model.startswith("gpt-5"):
         return model
     return RESEARCH_OPENAI_MODEL
+
+
+def _converter_model(
+    model: str,
+    *,
+    allow_web_research: bool,
+    allow_file_search: bool = False,
+) -> str:
+    """Return a model suitable for the contractor converter workflow."""
+    return _tool_enabled_model(
+        model,
+        allow_web_research=allow_web_research,
+        allow_file_search=allow_file_search,
+    )
 
 
 def _extract_web_search_sources(response) -> list[dict[str, str]]:
@@ -280,17 +470,192 @@ def _extract_web_search_sources(response) -> list[dict[str, str]]:
     return sources
 
 
-def _converter_response_options(*, allow_web_research: bool) -> dict[str, object]:
+def _extract_file_search_sources(response) -> list[dict[str, str]]:
+    """Extract unique file-search result references from a Responses API object."""
+    sources: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for item in getattr(response, "output", []) or []:
+        if str(getattr(item, "type", "") or "") != "file_search_call":
+            continue
+        results = getattr(item, "results", []) or []
+        for result in results:
+            if isinstance(result, dict):
+                filename = str(result.get("filename", "") or result.get("file_id", "") or "").strip()
+                score_value = result.get("score")
+            else:
+                filename = str(
+                    getattr(result, "filename", "") or getattr(result, "file_id", "") or ""
+                ).strip()
+                score_value = getattr(result, "score", None)
+
+            if not filename:
+                continue
+
+            score_text = ""
+            if isinstance(score_value, (float, int)):
+                score_text = f"Relevance {float(score_value):.2f}"
+
+            key = (filename, score_text)
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append(
+                {
+                    "title": filename,
+                    "url": "",
+                    "note": score_text,
+                }
+            )
+
+    return sources
+
+
+def _extract_container_artifacts(response) -> list[dict[str, str]]:
+    """Extract files created by the Code Interpreter tool from a response."""
+    artifacts: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for item in getattr(response, "output", []) or []:
+        if str(getattr(item, "type", "") or "") != "message":
+            continue
+
+        for content in getattr(item, "content", []) or []:
+            for annotation in getattr(content, "annotations", []) or []:
+                if isinstance(annotation, dict):
+                    annotation_type = str(annotation.get("type", "") or "")
+                    container_id = str(annotation.get("container_id", "") or "").strip()
+                    file_id = str(annotation.get("file_id", "") or "").strip()
+                    filename = str(annotation.get("filename", "") or file_id).strip()
+                else:
+                    annotation_type = str(getattr(annotation, "type", "") or "")
+                    container_id = str(getattr(annotation, "container_id", "") or "").strip()
+                    file_id = str(getattr(annotation, "file_id", "") or "").strip()
+                    filename = str(getattr(annotation, "filename", "") or file_id).strip()
+
+                if annotation_type != "container_file_citation" or not file_id:
+                    continue
+
+                key = (container_id, file_id, filename)
+                if key in seen:
+                    continue
+                seen.add(key)
+                artifacts.append(
+                    {
+                        "container_id": container_id,
+                        "file_id": file_id,
+                        "filename": filename,
+                    }
+                )
+
+    return artifacts
+
+
+def _extract_response_sources(response) -> list[dict[str, str]]:
+    """Collect web and file-search sources from one Responses API object."""
+    return _extract_web_search_sources(response) + _extract_file_search_sources(response)
+
+
+def _converter_response_options(
+    *,
+    allow_web_research: bool,
+    knowledge_vector_store_id: str = "",
+) -> dict[str, object]:
     """Build extra Responses API options for the contractor converter."""
-    if not allow_web_research:
+    tools: list[dict[str, object]] = []
+    include: list[str] = []
+
+    if allow_web_research:
+        tools.append({"type": "web_search"})
+        include.append("web_search_call.action.sources")
+
+    if knowledge_vector_store_id:
+        tools.append(
+            {
+                "type": "file_search",
+                "vector_store_ids": [knowledge_vector_store_id],
+                "max_num_results": 5,
+            }
+        )
+        include.append("file_search_call.results")
+
+    if not tools:
         return {}
 
     return {
         "reasoning": {"effort": "low"},
-        "tools": [{"type": "web_search"}],
+        "tools": tools,
         "tool_choice": "auto",
-        "include": ["web_search_call.action.sources"],
+        "include": include,
     }
+
+
+def _knowledge_vector_store_cache() -> dict[str, object]:
+    """Return the session cache entry used for uploaded project knowledge files."""
+    return st.session_state.setdefault(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY, {})
+
+
+def _ensure_knowledge_vector_store(
+    files: list[object],
+    *,
+    api_key: str,
+) -> tuple[str, list[str]]:
+    """Upload knowledge files to an ephemeral vector store and return its id."""
+    if not files:
+        return "", []
+
+    filenames = _uploaded_file_names(files)
+    signature = _uploaded_files_signature(files)
+    cache = _knowledge_vector_store_cache()
+    cached_signature = str(cache.get("signature", "") or "")
+    cached_vector_store_id = str(cache.get("vector_store_id", "") or "")
+    if signature and signature == cached_signature and cached_vector_store_id:
+        return cached_vector_store_id, filenames
+
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    vector_store = client.vector_stores.create(
+        name="WorkWatch Project Knowledge Base",
+        expires_after={"anchor": "last_active_at", "days": 1},
+    )
+
+    upload_handles: list[io.BytesIO] = []
+    for uploaded_file in files:
+        file_data = _uploaded_file_bytes(uploaded_file)
+        if not file_data:
+            continue
+        upload_handle = io.BytesIO(file_data)
+        upload_handle.name = _uploaded_file_name(uploaded_file)
+        upload_handles.append(upload_handle)
+
+    if not upload_handles:
+        raise ValueError("No readable knowledge files were uploaded.")
+
+    try:
+        batch = client.vector_stores.file_batches.upload_and_poll(
+            vector_store_id=vector_store.id,
+            files=upload_handles,
+        )
+    finally:
+        for upload_handle in upload_handles:
+            upload_handle.close()
+
+    file_counts = getattr(batch, "file_counts", None)
+    failed = int(getattr(file_counts, "failed", 0) or 0)
+    cancelled = int(getattr(file_counts, "cancelled", 0) or 0)
+    if failed or cancelled:
+        raise ValueError(
+            "Some knowledge files could not be indexed for file search. "
+            f"Failed: {failed}, cancelled: {cancelled}."
+        )
+
+    st.session_state[PROJECT_KNOWLEDGE_VECTOR_STORE_KEY] = {
+        "signature": signature,
+        "vector_store_id": vector_store.id,
+        "filenames": filenames,
+    }
+    return str(vector_store.id), filenames
 
 
 def _structured_report_rows(value: object) -> list[dict[str, str]]:
@@ -428,6 +793,57 @@ def _conversation_transcript(messages: list[dict[str, str]]) -> str:
     return "\n".join(lines).strip() or "No prior refinement chat."
 
 
+def _request_transcription_with_openai(
+    audio_files: list[object],
+    *,
+    api_key: str,
+    discipline: str,
+) -> str:
+    """Transcribe one or more uploaded voice notes into plain text."""
+    from openai import OpenAI
+
+    if not audio_files:
+        raise ValueError("Upload at least one voice note before requesting transcription.")
+
+    client = OpenAI(api_key=api_key)
+    prompt = (
+        f"This is a {discipline.lower()} construction site voice note for a daily report in Rwanda. "
+        "Preserve site names, district names, acronyms, equipment names, cable sizes, 15kV notation, "
+        "MV, LV, HSE, PPE, and quantities as accurately as possible."
+    )
+
+    transcripts: list[str] = []
+    for uploaded_file in audio_files:
+        file_data = _uploaded_file_bytes(uploaded_file)
+        if not file_data:
+            continue
+
+        audio_stream = io.BytesIO(file_data)
+        audio_stream.name = _uploaded_file_name(uploaded_file)
+        try:
+            transcription = client.audio.transcriptions.create(
+                model=TRANSCRIPTION_OPENAI_MODEL,
+                file=audio_stream,
+                response_format="text",
+                prompt=prompt,
+            )
+        finally:
+            audio_stream.close()
+
+        if isinstance(transcription, str):
+            transcript_text = transcription.strip()
+        else:
+            transcript_text = str(getattr(transcription, "text", "") or "").strip()
+
+        if transcript_text:
+            transcripts.append(f"Voice note ({_uploaded_file_name(uploaded_file)}):\n{transcript_text}")
+
+    if not transcripts:
+        raise ValueError("OpenAI did not return any transcription text.")
+
+    return "\n\n".join(transcripts)
+
+
 def _request_structured_reports_with_openai(
     raw_report_text: str,
     *,
@@ -435,15 +851,18 @@ def _request_structured_reports_with_openai(
     model: str,
     discipline: str,
     allow_web_research: bool = False,
+    supporting_files: list[object] | None = None,
+    knowledge_vector_store_id: str = "",
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Turn raw contractor text into consultant-style report rows using OpenAI."""
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key)
+    source_file_names = _uploaded_file_names(supporting_files)
     instructions = textwrap.dedent(
         f"""
         You are an experienced consultant preparing a daily consultant report for {discipline.lower()} works.
-        Convert the contractor's raw report into one or more consultant daily report rows.
+        Convert the contractor's raw report and any attached source files into one or more consultant daily report rows.
 
         Rules:
         - Return JSON that matches the schema exactly.
@@ -455,13 +874,38 @@ def _request_structured_reports_with_openai(
         - Put consultant judgement in Comment_on_work, Comment_on_HSE, Consultant_Recommandation, Non_Compliant_work, and Reaction_and_WayForword only when grounded in the source text.
         - If no grounded consultant recommendation exists, leave Consultant_Recommandation empty.
         - Preserve site names and dates exactly as written when possible.
+        - Use attached images only for visible evidence, not for hidden assumptions.
+        - If project knowledge files are available through file search, use them to improve terminology and consultant style without overriding the contractor facts.
         """
     ).strip()
 
+    prompt_sections = []
+    raw_text = raw_report_text.strip()
+    if raw_text:
+        prompt_sections.append(f"Primary contractor text:\n{raw_text}")
+    else:
+        prompt_sections.append(
+            "No primary contractor text was pasted. Use the attached documents and images as the source material."
+        )
+    if source_file_names:
+        prompt_sections.append(f"Attached source files: {', '.join(source_file_names)}")
+    prompt_sections.append("Use all attached evidence only when it supports the extracted report fields.")
+
+    request_input: object = "\n\n".join(prompt_sections)
+    if supporting_files:
+        request_input = _uploaded_files_to_response_input(
+            str(request_input),
+            uploaded_files=supporting_files,
+        )
+
     response = client.responses.create(
-        model=_converter_model(model, allow_web_research=allow_web_research),
+        model=_converter_model(
+            model,
+            allow_web_research=allow_web_research,
+            allow_file_search=bool(knowledge_vector_store_id),
+        ),
         instructions=instructions,
-        input=raw_report_text,
+        input=request_input,
         text={
             "format": {
                 "type": "json_schema",
@@ -471,7 +915,10 @@ def _request_structured_reports_with_openai(
             }
         },
         store=False,
-        **_converter_response_options(allow_web_research=allow_web_research),
+        **_converter_response_options(
+            allow_web_research=allow_web_research,
+            knowledge_vector_store_id=knowledge_vector_store_id,
+        ),
     )
 
     payload_text = _extract_openai_output_text(response)
@@ -479,7 +926,7 @@ def _request_structured_reports_with_openai(
         raise ValueError("OpenAI returned an empty structured output.")
 
     payload = json.loads(payload_text)
-    return _structured_report_rows(payload), _extract_web_search_sources(response)
+    return _structured_report_rows(payload), _extract_response_sources(response)
 
 
 def _request_refined_structured_reports_with_openai(
@@ -492,11 +939,14 @@ def _request_refined_structured_reports_with_openai(
     conversation: list[dict[str, str]],
     latest_feedback: str,
     allow_web_research: bool = False,
+    supporting_files: list[object] | None = None,
+    knowledge_vector_store_id: str = "",
 ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
     """Apply user chat feedback to the converted consultant rows."""
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key)
+    source_file_names = _uploaded_file_names(supporting_files)
     instructions = textwrap.dedent(
         f"""
         You are an experienced consultant assistant revising a {discipline.lower()} daily consultant report.
@@ -508,6 +958,7 @@ def _request_refined_structured_reports_with_openai(
         - Keep every field grounded in the contractor source text and the current structured rows.
         - Do not invent facts, dates, site names, manpower, materials, quality issues, or HSE events.
         - If web research is available, use it only to improve technical terminology, safety guidance, consultant wording, or general best-practice recommendations.
+        - If file search is available, prefer uploaded project documents for terminology, standards, and internal wording.
         - If the user requests a change that is not supported by the source text, explain that briefly in assistant_message and keep the unsupported part unchanged.
         - If the user asks a question, answer it in assistant_message and still return the best current reports.
         - assistant_message should be concise and directly state what changed or why something could not be changed.
@@ -525,15 +976,29 @@ def _request_refined_structured_reports_with_openai(
         Prior refinement chat:
         {_conversation_transcript(conversation)}
 
+        Attached source files:
+        {", ".join(source_file_names) if source_file_names else "None"}
+
         Latest user instruction:
         {latest_feedback}
         """
     ).strip()
 
+    request_input: object = request_text
+    if supporting_files:
+        request_input = _uploaded_files_to_response_input(
+            request_text,
+            uploaded_files=supporting_files,
+        )
+
     response = client.responses.create(
-        model=_converter_model(model, allow_web_research=allow_web_research),
+        model=_converter_model(
+            model,
+            allow_web_research=allow_web_research,
+            allow_file_search=bool(knowledge_vector_store_id),
+        ),
         instructions=instructions,
-        input=request_text,
+        input=request_input,
         text={
             "format": {
                 "type": "json_schema",
@@ -543,7 +1008,10 @@ def _request_refined_structured_reports_with_openai(
             }
         },
         store=False,
-        **_converter_response_options(allow_web_research=allow_web_research),
+        **_converter_response_options(
+            allow_web_research=allow_web_research,
+            knowledge_vector_store_id=knowledge_vector_store_id,
+        ),
     )
 
     payload_text = _extract_openai_output_text(response)
@@ -557,8 +1025,144 @@ def _request_refined_structured_reports_with_openai(
     return (
         assistant_message,
         _structured_report_rows(payload.get("reports", [])),
-        _extract_web_search_sources(response),
+        _extract_response_sources(response),
     )
+
+
+def _request_research_assistant_reply(
+    *,
+    api_key: str,
+    model: str,
+    discipline: str,
+    question: str,
+    conversation: list[dict[str, str]],
+    allow_web_research: bool = False,
+    knowledge_vector_store_id: str = "",
+) -> tuple[str, list[dict[str, str]]]:
+    """Answer a research or standards question using web/file search when enabled."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    instructions = textwrap.dedent(
+        f"""
+        You are a senior research assistant for {discipline.lower()} consultant reporting and site supervision.
+        Answer the user's question clearly and practically.
+
+        Rules:
+        - Prefer uploaded project knowledge files when file search is available.
+        - Use web research only when it adds current external context or technical best practice.
+        - Do not invent standard names, clauses, regulations, or project requirements.
+        - If the answer depends on an assumption, state it briefly.
+        - Keep the response concise, concrete, and useful for field reporting decisions.
+        """
+    ).strip()
+
+    request_text = textwrap.dedent(
+        f"""
+        Prior conversation:
+        {_conversation_transcript(conversation)}
+
+        Latest user question:
+        {question.strip()}
+        """
+    ).strip()
+
+    response = client.responses.create(
+        model=_tool_enabled_model(
+            model,
+            allow_web_research=allow_web_research,
+            allow_file_search=bool(knowledge_vector_store_id),
+        ),
+        instructions=instructions,
+        input=request_text,
+        store=False,
+        **_converter_response_options(
+            allow_web_research=allow_web_research,
+            knowledge_vector_store_id=knowledge_vector_store_id,
+        ),
+    )
+
+    reply_text = _extract_openai_output_text(response)
+    if not reply_text:
+        raise ValueError("OpenAI returned an empty research reply.")
+
+    return reply_text, _extract_response_sources(response)
+
+
+def _request_spreadsheet_analysis_with_openai(
+    *,
+    api_key: str,
+    model: str,
+    uploaded_files: list[object],
+    question: str,
+) -> tuple[str, list[dict[str, str]]]:
+    """Analyze uploaded spreadsheets and datasets using the Code Interpreter tool."""
+    from openai import OpenAI
+
+    if not uploaded_files:
+        raise ValueError("Upload at least one spreadsheet or dataset before running analysis.")
+
+    client = OpenAI(api_key=api_key)
+    instructions = textwrap.dedent(
+        """
+        You are a project controls and reporting analyst.
+        Always use the python tool on the uploaded files before answering.
+
+        Focus on:
+        - progress totals and trends
+        - anomalies, missing values, and duplicates
+        - site/date mismatches
+        - quantities, counts, and comparisons the user asks for
+        - concise, actionable conclusions
+
+        If it helps the answer, generate plots or export files in the container and mention them.
+        """
+    ).strip()
+
+    response = client.responses.create(
+        model=_tool_enabled_model(model, allow_code_interpreter=True),
+        tools=[
+            {
+                "type": "code_interpreter",
+                "container": {"type": "auto", "memory_limit": "4g"},
+            }
+        ],
+        tool_choice="required",
+        instructions=instructions,
+        input=_uploaded_files_to_response_input(question.strip(), uploaded_files=uploaded_files),
+        store=False,
+    )
+
+    analysis_text = _extract_openai_output_text(response)
+    if not analysis_text:
+        raise ValueError("OpenAI returned an empty spreadsheet analysis.")
+
+    return analysis_text, _extract_container_artifacts(response)
+
+
+def _request_text_to_speech_with_openai(
+    text: str,
+    *,
+    api_key: str,
+    voice: str = "coral",
+    instructions: str = "Speak in a calm, professional consultant briefing tone.",
+) -> bytes:
+    """Convert assistant text into MP3 audio."""
+    from openai import OpenAI
+
+    speech_input = str(text or "").strip()
+    if not speech_input:
+        raise ValueError("Text is required before generating speech.")
+
+    client = OpenAI(api_key=api_key)
+    response = client.audio.speech.create(
+        model=TTS_OPENAI_MODEL,
+        voice=voice,
+        input=speech_input[:4000],
+        instructions=instructions,
+        response_format="mp3",
+    )
+    return response.read()
 
 
 def _reset_contractor_chat(rows: list[dict[str, str]], *, source_label: str) -> None:
@@ -606,10 +1210,15 @@ def _render_contractor_chat_message(message: dict[str, object]) -> None:
             if not isinstance(source, dict):
                 continue
             url = str(source.get("url", "") or "").strip()
-            if not url:
-                continue
             title = str(source.get("title", "") or "").strip() or url
-            lines.append(f"- [{title}]({url})")
+            note = str(source.get("note", "") or "").strip()
+            if url:
+                line = f"- [{title}]({url})"
+            else:
+                line = f"- {title}"
+            if note:
+                line = f"{line} ({note})"
+            lines.append(line)
         if len(lines) > 1:
             _safe_markdown("\n".join(lines))
 
@@ -653,6 +1262,32 @@ def _clear_openai_chat() -> None:
     """Reset the chat transcript and response threading state."""
     st.session_state[OPENAI_CHAT_MESSAGES_KEY] = []
     st.session_state.pop(OPENAI_PREVIOUS_RESPONSE_ID_KEY, None)
+
+
+def _render_project_knowledge_base_panel() -> list[object]:
+    """Render the shared knowledge-base uploader used by AI workflows."""
+    st.subheader("Project Knowledge Base")
+    _safe_caption(
+        "Upload standards, procedures, approved reports, or client instructions. "
+        "The converter and research workspace will use them through OpenAI file search when needed."
+    )
+
+    uploaded_files = list(
+        _safe_file_uploader(
+            "Upload project knowledge files",
+            accept_multiple_files=True,
+            type=PROJECT_KNOWLEDGE_FILE_TYPES,
+            key="project_knowledge_files",
+        )
+        or []
+    )
+
+    if uploaded_files:
+        _safe_caption(f"Knowledge files ready: {', '.join(_uploaded_file_names(uploaded_files))}")
+    else:
+        st.session_state.pop(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY, None)
+
+    return uploaded_files
 
 
 def _render_openai_chat_panel() -> None:
@@ -745,11 +1380,16 @@ def _render_openai_chat_panel() -> None:
             _safe_write(message.get("content", ""))
 
 
-def _render_contractor_parser(discipline: str) -> None:
+def _render_contractor_parser(
+    discipline: str,
+    *,
+    knowledge_files: list[object] | None = None,
+) -> None:
     """Render the AI/local contractor-report conversion workflow."""
     st.subheader("Contractor Report Converter")
     _safe_caption(
-        "Paste raw contractor text, convert it into consultant daily report fields, review the result, then append it to Google Sheets."
+        "Paste raw contractor text, add contractor documents or site photos, transcribe voice notes, "
+        "convert everything into consultant daily report fields, refine the result, then append it to Google Sheets."
     )
 
     enable_parser = _safe_checkbox(
@@ -764,6 +1404,34 @@ def _render_contractor_parser(discipline: str) -> None:
         height=220,
         key="contractor_report_text",
     )
+    supporting_files = list(
+        _safe_file_uploader(
+            "Upload contractor documents or site photos (optional)",
+            accept_multiple_files=True,
+            type=CONTRACTOR_SUPPORTING_FILE_TYPES,
+            key="contractor_supporting_files",
+        )
+        or []
+    )
+    audio_files = list(
+        _safe_file_uploader(
+            "Upload contractor voice notes (optional)",
+            accept_multiple_files=True,
+            type=AUDIO_FILE_TYPES,
+            key="contractor_audio_files",
+        )
+        or []
+    )
+
+    if supporting_files:
+        _safe_caption(f"Attached source files: {', '.join(_uploaded_file_names(supporting_files))}")
+    if audio_files:
+        _safe_caption(f"Voice notes ready: {', '.join(_uploaded_file_names(audio_files))}")
+    if knowledge_files:
+        _safe_caption(
+            "Project knowledge base is available to the converter for internal wording, standards, and approved-report style."
+        )
+
     allow_web_research = _safe_checkbox(
         "Allow web research in converter chat",
         value=False,
@@ -774,17 +1442,57 @@ def _render_contractor_parser(discipline: str) -> None:
             "Research mode is slower and adds web-search tool cost. The converter will use web search when helpful and show clickable sources in the chat."
         )
 
+    if st.button("Transcribe voice notes into report text"):
+        try:
+            if not audio_files:
+                raise ValueError("Upload one or more voice notes before requesting transcription.")
+
+            api_key = _load_openai_api_key()
+            if not api_key:
+                raise ValueError("OpenAI API key is required for voice transcription.")
+
+            sdk_ready, sdk_error = _openai_sdk_ready()
+            if not sdk_ready:
+                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+
+            with _safe_spinner("Transcribing voice notes..."):
+                transcript = _request_transcription_with_openai(
+                    audio_files,
+                    api_key=api_key,
+                    discipline=discipline,
+                )
+        except Exception as exc:
+            st.warning(f"Voice transcription failed: {exc}")
+        else:
+            existing_text = str(st.session_state.get("contractor_report_text", "") or "").strip()
+            merged_text = f"{existing_text}\n\n{transcript}".strip() if existing_text else transcript
+            st.session_state["contractor_report_text"] = merged_text
+            st.success("Voice notes were transcribed and appended to the contractor report text.")
+            _safe_rerun()
+
     if st.button("Convert with ChatGPT"):
         try:
-            if not raw_report_text or not raw_report_text.strip():
-                raise ValueError("Paste contractor report text before converting.")
+            has_source_material = bool(raw_report_text and raw_report_text.strip()) or bool(supporting_files)
+            if not has_source_material:
+                raise ValueError(
+                    "Paste contractor report text, transcribe voice notes, or upload source files before converting."
+                )
 
             api_key = _load_openai_api_key()
             if not api_key:
                 raise ValueError("OpenAI API key is required for ChatGPT conversion.")
 
-            if not _openai_sdk_ready()[0]:
-                raise ValueError("OpenAI SDK is not installed in the active Streamlit environment.")
+            sdk_ready, sdk_error = _openai_sdk_ready()
+            if not sdk_ready:
+                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+
+            knowledge_vector_store_id = ""
+            if knowledge_files:
+                with _safe_spinner("Indexing project knowledge base..."):
+                    knowledge_vector_store_id, _ = _ensure_knowledge_vector_store(
+                        knowledge_files,
+                        api_key=api_key,
+                    )
 
             with _safe_spinner("Converting contractor report with ChatGPT..."):
                 parsed_rows, research_sources = _request_structured_reports_with_openai(
@@ -793,6 +1501,8 @@ def _render_contractor_parser(discipline: str) -> None:
                     model=_default_openai_model(),
                     discipline=discipline,
                     allow_web_research=allow_web_research,
+                    supporting_files=supporting_files,
+                    knowledge_vector_store_id=knowledge_vector_store_id,
                 )
         except Exception as exc:
             st.warning(f"ChatGPT conversion failed: {exc}")
@@ -805,7 +1515,7 @@ def _render_contractor_parser(discipline: str) -> None:
             if research_sources:
                 st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["content"] = (
                     st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["content"]
-                    + " Web research was used where helpful."
+                    + " Additional research sources were used where helpful."
                 )
                 st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["sources"] = research_sources
             st.success(f"ChatGPT produced {len(parsed_rows)} structured report row(s).")
@@ -882,8 +1592,11 @@ def _render_contractor_parser(discipline: str) -> None:
 
     if refinement_prompt:
         try:
-            if not raw_report_text or not raw_report_text.strip():
-                raise ValueError("Paste contractor report text before asking for refinements.")
+            has_source_material = bool(raw_report_text and raw_report_text.strip()) or bool(supporting_files)
+            if not has_source_material:
+                raise ValueError(
+                    "Paste contractor report text, transcribe voice notes, or upload source files before asking for refinements."
+                )
 
             api_key = _load_openai_api_key()
             if not api_key:
@@ -892,6 +1605,14 @@ def _render_contractor_parser(discipline: str) -> None:
             sdk_ready, sdk_error = _openai_sdk_ready()
             if not sdk_ready:
                 raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+
+            knowledge_vector_store_id = ""
+            if knowledge_files:
+                with _safe_spinner("Refreshing project knowledge base..."):
+                    knowledge_vector_store_id, _ = _ensure_knowledge_vector_store(
+                        knowledge_files,
+                        api_key=api_key,
+                    )
 
             with _safe_spinner("Applying your refinement request..."):
                 assistant_message, refined_rows, research_sources = _request_refined_structured_reports_with_openai(
@@ -903,6 +1624,8 @@ def _render_contractor_parser(discipline: str) -> None:
                     conversation=refinement_messages,
                     latest_feedback=refinement_prompt,
                     allow_web_research=allow_web_research,
+                    supporting_files=supporting_files,
+                    knowledge_vector_store_id=knowledge_vector_store_id,
                 )
         except Exception as exc:
             st.warning(f"ChatGPT refinement failed: {exc}")
@@ -916,6 +1639,254 @@ def _render_contractor_parser(discipline: str) -> None:
             _persist_parsed_contractor_rows(refined_rows)
             st.success("Converted rows updated from your instruction.")
             _safe_rerun()
+
+
+def _render_ai_research_workspace(
+    discipline: str,
+    *,
+    knowledge_files: list[object] | None = None,
+) -> None:
+    """Render research, analytics, and readback workflows powered by OpenAI."""
+    st.subheader("AI Research Workspace")
+    _safe_caption(
+        "Use OpenAI file search, web research, code interpreter, and text-to-speech to support reporting and QA decisions."
+    )
+
+    with _safe_expander("Standards & Research Assistant", expanded=False):
+        allow_web_research = _safe_checkbox(
+            "Allow web research in research assistant",
+            value=True,
+            key="research_assistant_web_research",
+        )
+        if knowledge_files:
+            _safe_caption("The uploaded project knowledge base will be searched when relevant.")
+        else:
+            _safe_caption("Upload knowledge files above if you want the assistant to search project-specific documents.")
+
+        research_messages = st.session_state.setdefault(RESEARCH_ASSISTANT_MESSAGES_KEY, [])
+        for message in research_messages:
+            _render_contractor_chat_message(message)
+
+        research_question = _safe_text_input(
+            "Research question",
+            value="",
+            key="research_assistant_question",
+            placeholder="Ask about standards, wording, compliance, or best-practice guidance.",
+        ).strip()
+
+        ask_col, clear_col, audio_col = _safe_columns(3, gap="large")
+        with ask_col:
+            ask_clicked = st.button("Ask Research Assistant")
+        with clear_col:
+            clear_clicked = st.button("Clear research chat")
+        with audio_col:
+            read_research_audio = st.button("Read last research answer aloud")
+
+        if clear_clicked:
+            st.session_state[RESEARCH_ASSISTANT_MESSAGES_KEY] = []
+            st.session_state.pop(RESEARCH_ASSISTANT_AUDIO_KEY, None)
+            st.session_state["research_assistant_question"] = ""
+            _safe_rerun()
+
+        if ask_clicked:
+            try:
+                if not research_question:
+                    raise ValueError("Enter a research question before sending it to the assistant.")
+
+                api_key = _load_openai_api_key()
+                if not api_key:
+                    raise ValueError("OpenAI API key is required for the research assistant.")
+
+                sdk_ready, sdk_error = _openai_sdk_ready()
+                if not sdk_ready:
+                    raise ValueError(
+                        f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}"
+                    )
+
+                knowledge_vector_store_id = ""
+                if knowledge_files:
+                    with _safe_spinner("Indexing project knowledge base..."):
+                        knowledge_vector_store_id, _ = _ensure_knowledge_vector_store(
+                            knowledge_files,
+                            api_key=api_key,
+                        )
+
+                with _safe_spinner("Research assistant is thinking..."):
+                    assistant_message, sources = _request_research_assistant_reply(
+                        api_key=api_key,
+                        model=_default_openai_model(),
+                        discipline=discipline,
+                        question=research_question,
+                        conversation=research_messages,
+                        allow_web_research=allow_web_research,
+                        knowledge_vector_store_id=knowledge_vector_store_id,
+                    )
+            except Exception as exc:
+                st.warning(f"Research assistant failed: {exc}")
+            else:
+                research_messages.append({"role": "user", "content": research_question, "sources": []})
+                research_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_message,
+                        "sources": sources,
+                    }
+                )
+                st.session_state["research_assistant_question"] = ""
+                st.session_state.pop(RESEARCH_ASSISTANT_AUDIO_KEY, None)
+                _safe_rerun()
+
+        if read_research_audio:
+            try:
+                last_assistant_message = next(
+                    (
+                        str(message.get("content", "") or "").strip()
+                        for message in reversed(research_messages)
+                        if str(message.get("role", "") or "") == "assistant"
+                        and str(message.get("content", "") or "").strip()
+                    ),
+                    "",
+                )
+                if not last_assistant_message:
+                    raise ValueError("Ask the research assistant a question before generating readback audio.")
+
+                api_key = _load_openai_api_key()
+                if not api_key:
+                    raise ValueError("OpenAI API key is required for text-to-speech.")
+
+                sdk_ready, sdk_error = _openai_sdk_ready()
+                if not sdk_ready:
+                    raise ValueError(
+                        f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}"
+                    )
+
+                with _safe_spinner("Generating research audio..."):
+                    st.session_state[RESEARCH_ASSISTANT_AUDIO_KEY] = _request_text_to_speech_with_openai(
+                        last_assistant_message,
+                        api_key=api_key,
+                    )
+            except Exception as exc:
+                st.warning(f"Audio generation failed: {exc}")
+
+        research_audio = st.session_state.get(RESEARCH_ASSISTANT_AUDIO_KEY)
+        if research_audio:
+            _safe_audio(research_audio, format="audio/mp3")
+
+    with _safe_expander("Spreadsheet Analyst", expanded=False):
+        analysis_files = list(
+            _safe_file_uploader(
+                "Upload spreadsheets or datasets",
+                accept_multiple_files=True,
+                type=ANALYST_FILE_TYPES,
+                key="spreadsheet_analyst_files",
+            )
+            or []
+        )
+        if analysis_files:
+            _safe_caption(f"Analysis files ready: {', '.join(_uploaded_file_names(analysis_files))}")
+
+        analysis_question = _safe_text_input(
+            "Analysis request",
+            value="",
+            key="spreadsheet_analyst_question",
+            placeholder="Summarize progress by site, detect missing dates, find anomalies, compare quantities...",
+        ).strip()
+
+        analyze_col, clear_result_col, audio_col = _safe_columns(3, gap="large")
+        with analyze_col:
+            analyze_clicked = st.button("Analyze spreadsheets with ChatGPT")
+        with clear_result_col:
+            clear_analysis_clicked = st.button("Clear spreadsheet analysis")
+        with audio_col:
+            read_analysis_audio = st.button("Read spreadsheet analysis aloud")
+
+        if clear_analysis_clicked:
+            st.session_state.pop(SHEET_ANALYST_RESULT_KEY, None)
+            st.session_state.pop(SHEET_ANALYST_AUDIO_KEY, None)
+            st.session_state["spreadsheet_analyst_question"] = ""
+            _safe_rerun()
+
+        if analyze_clicked:
+            try:
+                if not analysis_files:
+                    raise ValueError("Upload one or more spreadsheets or datasets before running analysis.")
+
+                api_key = _load_openai_api_key()
+                if not api_key:
+                    raise ValueError("OpenAI API key is required for spreadsheet analysis.")
+
+                sdk_ready, sdk_error = _openai_sdk_ready()
+                if not sdk_ready:
+                    raise ValueError(
+                        f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}"
+                    )
+
+                question = analysis_question or (
+                    "Use the python tool to summarize the uploaded datasets, highlight anomalies, "
+                    "flag missing values, and surface the most actionable reporting insights."
+                )
+
+                with _safe_spinner("Analyzing spreadsheets with the python tool..."):
+                    analysis_text, artifacts = _request_spreadsheet_analysis_with_openai(
+                        api_key=api_key,
+                        model=_default_openai_model(),
+                        uploaded_files=analysis_files,
+                        question=question,
+                    )
+            except Exception as exc:
+                st.warning(f"Spreadsheet analysis failed: {exc}")
+            else:
+                st.session_state[SHEET_ANALYST_RESULT_KEY] = {
+                    "text": analysis_text,
+                    "artifacts": artifacts,
+                }
+                st.session_state.pop(SHEET_ANALYST_AUDIO_KEY, None)
+
+        if read_analysis_audio:
+            try:
+                result = st.session_state.get(SHEET_ANALYST_RESULT_KEY, {})
+                analysis_text = str(result.get("text", "") or "").strip()
+                if not analysis_text:
+                    raise ValueError("Run a spreadsheet analysis before generating readback audio.")
+
+                api_key = _load_openai_api_key()
+                if not api_key:
+                    raise ValueError("OpenAI API key is required for text-to-speech.")
+
+                sdk_ready, sdk_error = _openai_sdk_ready()
+                if not sdk_ready:
+                    raise ValueError(
+                        f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}"
+                    )
+
+                with _safe_spinner("Generating spreadsheet analysis audio..."):
+                    st.session_state[SHEET_ANALYST_AUDIO_KEY] = _request_text_to_speech_with_openai(
+                        analysis_text,
+                        api_key=api_key,
+                    )
+            except Exception as exc:
+                st.warning(f"Audio generation failed: {exc}")
+
+        analysis_result = st.session_state.get(SHEET_ANALYST_RESULT_KEY, {})
+        analysis_text = str(analysis_result.get("text", "") or "").strip()
+        if analysis_text:
+            _safe_markdown(analysis_text)
+
+        artifacts = analysis_result.get("artifacts", [])
+        if isinstance(artifacts, list) and artifacts:
+            lines = ["Generated files:"]
+            for artifact in artifacts:
+                if not isinstance(artifact, dict):
+                    continue
+                filename = str(artifact.get("filename", "") or "").strip()
+                if filename:
+                    lines.append(f"- {filename}")
+            if len(lines) > 1:
+                _safe_markdown("\n".join(lines))
+
+        analysis_audio = st.session_state.get(SHEET_ANALYST_AUDIO_KEY)
+        if analysis_audio:
+            _safe_audio(analysis_audio, format="audio/mp3")
 
 
 def _load_sheet_context():
@@ -965,6 +1936,7 @@ def run_app():
     _safe_markdown('<div id="reports-section"></div>', unsafe_allow_html=True)
     render_workwatch_header()
     _render_openai_chat_panel()
+    project_knowledge_files = _render_project_knowledge_base_panel()
 
     _safe_markdown(
         """
@@ -1150,7 +2122,8 @@ def run_app():
             st.session_state.setdefault("images", {})[key] = [f.read() for f in files]
             _safe_image(st.session_state["images"][key], width=220)
 
-    _render_contractor_parser(discipline)
+    _render_contractor_parser(discipline, knowledge_files=project_knowledge_files)
+    _render_ai_research_workspace(discipline, knowledge_files=project_knowledge_files)
 
     st.json(st.session_state.get("structured_report_data", structured_from_rows))
 
