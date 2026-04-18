@@ -34,6 +34,16 @@ def safe_columns(*args, **kwargs):
     return tuple(columns_list)
 
 
+def safe_container(*, border: bool = False):
+    container_fn = getattr(st, "container", None)
+    if callable(container_fn):
+        try:
+            return container_fn(border=border)
+        except TypeError:
+            return container_fn()
+    return nullcontext()
+
+
 def safe_markdown(markdown: str, **kwargs) -> None:
     markdown_fn = getattr(st, "markdown", None)
     if callable(markdown_fn):
@@ -105,6 +115,53 @@ def safe_selectbox(label: str, options: list[str], index: int = 0, **kwargs):
     return options[safe_index]
 
 
+def safe_radio(label: str, options: list[str], index: int = 0, **kwargs):
+    radio_fn = getattr(st, "radio", None)
+    if callable(radio_fn):
+        try:
+            return radio_fn(label, options, index=index, **kwargs)
+        except TypeError:
+            try:
+                return radio_fn(label, options, index=index)
+            except TypeError:
+                return radio_fn(label, options)
+    if not options:
+        return None
+    safe_index = max(0, min(index, len(options) - 1))
+    return options[safe_index]
+
+
+def safe_multiselect(label: str, options: list[str], default=None, **kwargs):
+    multiselect_fn = getattr(st, "multiselect", None)
+    resolved_default = list(default or [])
+    if callable(multiselect_fn):
+        try:
+            return multiselect_fn(label, options, default=resolved_default, **kwargs)
+        except TypeError:
+            try:
+                return multiselect_fn(label, options, resolved_default)
+            except TypeError:
+                return multiselect_fn(label, options)
+    return resolved_default
+
+
+def safe_slider(label: str, *, min_value, max_value, value, step=1, **kwargs):
+    slider_fn = getattr(st, "slider", None)
+    if callable(slider_fn):
+        try:
+            return slider_fn(
+                label,
+                min_value=min_value,
+                max_value=max_value,
+                value=value,
+                step=step,
+                **kwargs,
+            )
+        except TypeError:
+            return slider_fn(label, min_value, max_value, value, step)
+    return value
+
+
 def safe_file_uploader(label: str, **kwargs):
     uploader_fn = getattr(st, "file_uploader", None)
     if callable(uploader_fn):
@@ -112,6 +169,16 @@ def safe_file_uploader(label: str, **kwargs):
     if kwargs.get("accept_multiple_files"):
         return []
     return None
+
+
+def safe_button(label: str, **kwargs) -> bool:
+    button_fn = getattr(st, "button", None)
+    if callable(button_fn):
+        try:
+            return bool(button_fn(label, **kwargs))
+        except TypeError:
+            return bool(button_fn(label))
+    return False
 
 
 def safe_write(value: object) -> None:
@@ -158,6 +225,18 @@ def safe_audio(data, **kwargs) -> None:
     audio_fn = getattr(st, "audio", None)
     if callable(audio_fn):
         audio_fn(data, **kwargs)
+
+
+def safe_metric(label: str, value: object, **kwargs) -> None:
+    metric_fn = getattr(st, "metric", None)
+    if callable(metric_fn):
+        try:
+            metric_fn(label, value, **kwargs)
+            return
+        except TypeError:
+            metric_fn(label, value)
+            return
+    safe_markdown(f"**{label}:** {value}")
 
 
 def safe_audio_input(label: str, **kwargs):
