@@ -88,7 +88,23 @@ def test_log_usage_event_redacts_unexpected_model_identifiers(tmp_path, monkeypa
     )
 
     payload = json.loads(log_path.read_text(encoding="utf-8").strip())
-    assert payload["model"] == "[REDACTED_MODEL]"
+    assert payload["model"] == "[CONFIGURED_MODEL]"
+
+
+def test_log_usage_event_keeps_known_safe_model_identifiers(tmp_path, monkeypatch):
+    log_path = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", log_path)
+
+    usage_logging.log_usage_event(
+        feature_name="research_assistant",
+        model="gpt-5.4-mini",
+        has_files=False,
+        has_images=False,
+        status="success",
+    )
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert payload["model"] == "gpt-5.4-mini"
 
 
 def test_usage_counts_summarizes_failures():

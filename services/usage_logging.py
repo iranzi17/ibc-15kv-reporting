@@ -11,8 +11,12 @@ from core.session_state import utc_timestamp
 
 USAGE_LOG_FILE = Path(os.environ.get("OPENAI_USAGE_LOG_FILE", str(BASE_DIR / "openai_usage_log.jsonl")))
 MAX_ERROR_SUMMARY_LENGTH = 180
-MAX_MODEL_LOG_LENGTH = 64
-_SAFE_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+_SAFE_MODEL_LOG_VALUES = {
+    "gpt-4o-mini": "gpt-4o-mini",
+    "gpt-4o-transcribe": "gpt-4o-transcribe",
+    "gpt-4o-mini-tts": "gpt-4o-mini-tts",
+    "gpt-5.4-mini": "gpt-5.4-mini",
+}
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+/=]{8,}"), r"\1[REDACTED]"),
@@ -46,18 +50,9 @@ def sanitize_error_summary(error_summary: str) -> str:
 
 
 def sanitize_model_for_logging(model: str) -> str:
-    """Return a safe model identifier for local logging."""
+    """Return a fixed safe label for the configured model."""
     value = str(model or "").strip()
-    if not value:
-        return "[REDACTED_MODEL]"
-
-    if len(value) > MAX_MODEL_LOG_LENGTH:
-        value = value[:MAX_MODEL_LOG_LENGTH]
-
-    if not _SAFE_MODEL_PATTERN.fullmatch(value):
-        return "[REDACTED_MODEL]"
-
-    return value
+    return _SAFE_MODEL_LOG_VALUES.get(value, "[CONFIGURED_MODEL]")
 
 
 def log_usage_event(
