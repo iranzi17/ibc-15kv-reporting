@@ -17,6 +17,18 @@ _SAFE_MODEL_LOG_VALUES = {
     "gpt-4o-mini-tts": "gpt-4o-mini-tts",
     "gpt-5.4-mini": "gpt-5.4-mini",
 }
+_SAFE_FEATURE_LOG_VALUES = {
+    "contractor_conversion",
+    "contractor_refinement",
+    "general_chat",
+    "image_captioning",
+    "research_assistant",
+    "self_healing",
+    "spreadsheet_analyst",
+    "text_to_speech",
+    "transcription",
+}
+_SAFE_STATUS_LOG_VALUES = {"success", "failed"}
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+/=]{8,}"), r"\1[REDACTED]"),
@@ -55,6 +67,18 @@ def sanitize_model_for_logging(model: str) -> str:
     return _SAFE_MODEL_LOG_VALUES.get(value, "[CONFIGURED_MODEL]")
 
 
+def sanitize_feature_name_for_logging(feature_name: str) -> str:
+    """Return an allow-listed feature label for usage logs."""
+    value = str(feature_name or "").strip()
+    return value if value in _SAFE_FEATURE_LOG_VALUES else "[FEATURE]"
+
+
+def sanitize_status_for_logging(status: str) -> str:
+    """Return a safe coarse status value for usage logs."""
+    value = str(status or "").strip().lower()
+    return value if value in _SAFE_STATUS_LOG_VALUES else "success"
+
+
 def log_usage_event(
     *,
     feature_name: str,
@@ -65,16 +89,17 @@ def log_usage_event(
     error_summary: str = "",
 ) -> None:
     """Append one OpenAI usage event to the local JSONL log."""
-    event = {
-        "timestamp": utc_timestamp(),
-        "feature_name": str(feature_name or "").strip(),
-        "model": sanitize_model_for_logging(model),
-        "has_files": bool(has_files),
-        "has_images": bool(has_images),
-        # Keep failure tracking high-level; never persist raw or derived error text locally.
-        "status": str(status or "").strip() or "success",
-    }
     try:
+        _ = sanitize_error_summary(error_summary)
+        event = {
+            "timestamp": utc_timestamp(),
+            "feature_name": sanitize_feature_name_for_logging(feature_name),
+            "model": sanitize_model_for_logging(model),
+            "has_files": bool(has_files),
+            "has_images": bool(has_images),
+            # Keep failure tracking high-level; never persist raw or derived error text locally.
+            "status": sanitize_status_for_logging(status),
+        }
         USAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(USAGE_LOG_FILE, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=True) + "\n")

@@ -1,5 +1,9 @@
 import json
+import builtins
+import sys
+import types
 
+from services import openai_client
 from services import usage_logging
 
 
@@ -105,6 +109,89 @@ def test_log_usage_event_keeps_known_safe_model_identifiers(tmp_path, monkeypatc
 
     payload = json.loads(log_path.read_text(encoding="utf-8").strip())
     assert payload["model"] == "gpt-5.4-mini"
+
+
+def test_log_usage_event_uses_allowlisted_feature_and_status(tmp_path, monkeypatch):
+    log_path = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", log_path)
+
+    usage_logging.log_usage_event(
+        feature_name="feature token=secret",
+        model="gpt-5.4-mini",
+        has_files=False,
+        has_images=False,
+        status="unexpected-status",
+    )
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert payload["feature_name"] == "[FEATURE]"
+    assert payload["status"] == "success"
+
+
+def test_log_usage_event_is_non_fatal_when_file_write_fails(monkeypatch):
+    class _BrokenPath:
+        parent = None
+
+        def exists(self):
+            return False
+
+    class _BrokenParent:
+        def mkdir(self, *_, **__):
+            return None
+
+    broken_file = _BrokenPath()
+    broken_file.parent = _BrokenParent()
+    monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", broken_file)
+    monkeypatch.setattr(builtins, "open", lambda *_, **__: (_ for _ in ()).throw(OSError("readonly")))
+
+    usage_logging.log_usage_event(
+        feature_name="research_assistant",
+        model="gpt-5.4-mini",
+        has_files=False,
+        has_images=False,
+        status="failed",
+        error_summary="Authorization: Bearer topsecrettokenvalue",
+    )
+
+
+def test_request_openai_reply_succeeds_when_usage_log_write_fails(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return types.SimpleNamespace(output_text="Reply text", output=[], id="resp_123")
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            captured["api_key"] = api_key
+            self.responses = _FakeResponses()
+
+    class _BrokenPath:
+        parent = None
+
+    class _BrokenParent:
+        def mkdir(self, *_, **__):
+            return None
+
+    broken_file = _BrokenPath()
+    broken_file.parent = _BrokenParent()
+
+    monkeypatch.setattr(openai_client, "st", types.SimpleNamespace(session_state={}))
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
+    monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", broken_file)
+    monkeypatch.setattr(builtins, "open", lambda *_, **__: (_ for _ in ()).throw(OSError("readonly")))
+
+    reply_text, response_id = openai_client.request_openai_reply(
+        "Summarize the report status.",
+        api_key="test-key",
+        model="gpt-4o-mini",
+    )
+
+    assert reply_text == "Reply text"
+    assert response_id == "resp_123"
+    assert captured["api_key"] == "test-key"
+    assert captured["model"] == "gpt-4o-mini"
 
 
 def test_usage_counts_summarizes_failures():

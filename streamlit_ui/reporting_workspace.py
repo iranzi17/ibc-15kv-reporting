@@ -90,6 +90,20 @@ def generate_reports_with_gallery_options(
         return generate_reports_fn(*base_args, **base_kwargs)
 
 
+def fallback_caption_mapping_for_images(image_mapping: dict) -> dict[tuple[str, str], list[str]]:
+    """Return a safe caption fallback that preserves image ordering."""
+    fallback: dict[tuple[str, str], list[str]] = {}
+    for key, images in (image_mapping or {}).items():
+        if not isinstance(key, tuple) or len(key) != 2:
+            continue
+        site = str(key[0] or "").strip()
+        date = str(key[1] or "").strip()
+        normalized_key = (site, date)
+        image_count = len(images) if isinstance(images, list) else 0
+        fallback[normalized_key] = ["" for _ in range(image_count)]
+    return fallback
+
+
 def render_gallery_sidebar() -> dict[str, object]:
     """Render restrained report output controls in the sidebar."""
     st.sidebar.subheader("Report Output Settings")
@@ -230,14 +244,23 @@ def render_reporting_workspace(
                 api_key = load_openai_api_key()
                 sdk_ready, sdk_error = openai_sdk_ready()
                 if api_key and sdk_ready:
-                    with safe_spinner("Generating AI photo captions..."):
-                        image_caption_mapping = generate_ai_photo_captions_for_reports(
-                            review_rows,
-                            image_mapping,
-                            api_key=api_key,
-                            model=default_openai_model(),
-                            discipline=discipline,
-                            persistent_guidance=active_guidance_text("captions", "converter"),
+                    try:
+                        with safe_spinner("Generating AI photo captions..."):
+                            image_caption_mapping = generate_ai_photo_captions_for_reports(
+                                review_rows,
+                                image_mapping,
+                                api_key=api_key,
+                                model=default_openai_model(),
+                                discipline=discipline,
+                                persistent_guidance=active_guidance_text("captions", "converter"),
+                            )
+                    except Exception as caption_error:
+                        image_caption_mapping = fallback_caption_mapping_for_images(image_mapping)
+                        st.warning("AI photo captions failed and were skipped. Report export will continue.")
+                        record_runtime_issue(
+                            "photo_captioning",
+                            "AI photo captions failed; report export continued with fallback captions.",
+                            details=str(caption_error),
                         )
                 elif not sdk_ready:
                     st.warning(f"Photo captions skipped because the OpenAI SDK is unavailable. {sdk_error}")
