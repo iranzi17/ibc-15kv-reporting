@@ -11,6 +11,8 @@ from core.session_state import utc_timestamp
 
 USAGE_LOG_FILE = Path(os.environ.get("OPENAI_USAGE_LOG_FILE", str(BASE_DIR / "openai_usage_log.jsonl")))
 MAX_ERROR_SUMMARY_LENGTH = 180
+MAX_MODEL_LOG_LENGTH = 64
+_SAFE_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+/=]{8,}"), r"\1[REDACTED]"),
@@ -43,6 +45,21 @@ def sanitize_error_summary(error_summary: str) -> str:
     return sanitized
 
 
+def sanitize_model_for_logging(model: str) -> str:
+    """Return a safe model identifier for local logging."""
+    value = str(model or "").strip()
+    if not value:
+        return "[REDACTED_MODEL]"
+
+    if len(value) > MAX_MODEL_LOG_LENGTH:
+        value = value[:MAX_MODEL_LOG_LENGTH]
+
+    if not _SAFE_MODEL_PATTERN.fullmatch(value):
+        return "[REDACTED_MODEL]"
+
+    return value
+
+
 def log_usage_event(
     *,
     feature_name: str,
@@ -56,7 +73,7 @@ def log_usage_event(
     event = {
         "timestamp": utc_timestamp(),
         "feature_name": str(feature_name or "").strip(),
-        "model": str(model or "").strip(),
+        "model": sanitize_model_for_logging(model),
         "has_files": bool(has_files),
         "has_images": bool(has_images),
         "status": str(status or "").strip() or "success",
