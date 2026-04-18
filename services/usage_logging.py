@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -61,44 +60,6 @@ def sanitize_model_for_logging(model: str) -> str:
     return value
 
 
-def fingerprint_error_summary(error_summary: str) -> str:
-    """Return a deterministic non-reversible fingerprint for a sanitized summary."""
-    sanitized = sanitize_error_summary(error_summary)
-    if not sanitized:
-        return ""
-    return hashlib.sha256(sanitized.encode("utf-8")).hexdigest()[:16]
-
-
-def classify_error_summary(error_summary: str) -> str:
-    """Return a coarse error category without persisting any raw failure text."""
-    sanitized = sanitize_error_summary(error_summary)
-    if not sanitized:
-        return ""
-
-    lowered = sanitized.lower()
-    if "[redacted" in lowered:
-        return "redacted_sensitive_content"
-    if "rate limit" in lowered:
-        return "rate_limit"
-    if "timeout" in lowered:
-        return "timeout"
-    if any(token in lowered for token in ("unauthorized", "forbidden", "authentication", "invalid_api_key")):
-        return "authentication"
-    if any(token in lowered for token in ("connection", "network", "dns", "socket")):
-        return "network"
-    return "general_error"
-
-
-def error_summary_metadata(error_summary: str) -> dict[str, object]:
-    """Return safe log fields derived from an error summary."""
-    sanitized = sanitize_error_summary(error_summary)
-    return {
-        "error_summary_present": bool(sanitized),
-        "error_summary_category": classify_error_summary(sanitized),
-        "error_summary_fingerprint": fingerprint_error_summary(sanitized),
-    }
-
-
 def log_usage_event(
     *,
     feature_name: str,
@@ -115,8 +76,8 @@ def log_usage_event(
         "model": sanitize_model_for_logging(model),
         "has_files": bool(has_files),
         "has_images": bool(has_images),
+        # Keep failure tracking high-level; never persist raw or derived error text locally.
         "status": str(status or "").strip() or "success",
-        **error_summary_metadata(error_summary),
     }
     try:
         USAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)

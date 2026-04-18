@@ -27,7 +27,7 @@ def test_log_usage_event_and_readback(tmp_path, monkeypatch):
 
     assert len(events) == 2
     assert events[0]["feature_name"] == "research_assistant"
-    assert events[0]["error_summary_present"] is True
+    assert "error_summary_present" not in events[0]
     assert events[1]["feature_name"] == "contractor_conversion"
     with open(log_path, "r", encoding="utf-8") as handle:
         raw_lines = [json.loads(line) for line in handle if line.strip()]
@@ -68,11 +68,9 @@ def test_log_usage_event_persists_only_safe_error_metadata(tmp_path, monkeypatch
     )
 
     payload = json.loads(log_path.read_text(encoding="utf-8").strip())
-    assert payload["error_summary_present"] is True
-    assert payload["error_summary_category"] == "redacted_sensitive_content"
-    assert payload["error_summary_fingerprint"] == usage_logging.fingerprint_error_summary(
-        "authorization: Bearer topsecrettokenvalue"
-    )
+    assert "error_summary_present" not in payload
+    assert "error_summary_category" not in payload
+    assert "error_summary_fingerprint" not in payload
     assert "topsecrettokenvalue" not in log_path.read_text(encoding="utf-8")
     assert "[REDACTED" not in log_path.read_text(encoding="utf-8")
 
