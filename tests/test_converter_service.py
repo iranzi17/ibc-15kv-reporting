@@ -65,3 +65,16 @@ def test_validation_rejects_empty_or_near_empty_requests():
         raw_report_text="source",
     ) == ["The refinement instruction is too short to apply reliably."]
 
+
+
+def test_apply_field_locks_keeps_new_rows_when_row_counts_mismatch():
+    previous = [_row(Date="2026-04-17", Site_Name="SITE A")]
+    updated = [
+        _row(Date="2026-04-18", Site_Name="SITE B"),
+        _row(Date="2026-04-19", Site_Name="SITE C"),
+    ]
+
+    locked = apply_field_locks(previous, updated, locked_fields=["Date", "Site_Name"])
+
+    assert [row["Site_Name"] for row in locked] == ["SITE B", "SITE C"]
+    assert [row["Date"] for row in locked] == ["2026-04-18", "2026-04-19"]

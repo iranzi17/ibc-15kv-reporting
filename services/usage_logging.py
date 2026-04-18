@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -9,6 +10,37 @@ from config import BASE_DIR
 from core.session_state import utc_timestamp
 
 USAGE_LOG_FILE = Path(os.environ.get("OPENAI_USAGE_LOG_FILE", str(BASE_DIR / "openai_usage_log.jsonl")))
+MAX_ERROR_SUMMARY_LENGTH = 180
+
+_SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+/=]{8,}"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\b(sk-[A-Za-z0-9]{10,}|rk-[A-Za-z0-9]{10,})\b"), "[REDACTED_API_KEY]"),
+    (
+        re.compile(
+            r"(?i)\b(api(?:_|\s*)key|token|secret|password|passwd|authorization)\b\s*[:=]\s*['\"]?[^\s,'\"}]{4,}"
+        ),
+        "[REDACTED_CREDENTIAL]",
+    ),
+    (re.compile(r"(?i)data:[^\s,;]{1,64};base64,[A-Za-z0-9+/=]{24,}"), "[REDACTED_DATA_URL]"),
+    (re.compile(r"\b[A-Za-z0-9+/]{64,}={0,2}\b"), "[REDACTED_LONG_TOKEN]"),
+    (re.compile(r"(?i)(?:\b(?:code|otp|token)\b\s*[:#-]?\s*)\d{6,8}\b"), "[REDACTED_CODE]"),
+    (re.compile(r"(?i)\b\d{6,8}\b(?=\s*(?:code|otp|token)\b)"), "[REDACTED_CODE]"),
+]
+
+
+def sanitize_error_summary(error_summary: str) -> str:
+    """Return a compact and redacted error summary safe for local logging."""
+    text = str(error_summary or "").strip()
+    if not text:
+        return ""
+
+    sanitized = " ".join(text.split())
+    for pattern, replacement in _SECRET_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+
+    if len(sanitized) > MAX_ERROR_SUMMARY_LENGTH:
+        sanitized = f"{sanitized[:MAX_ERROR_SUMMARY_LENGTH].rstrip()}..."
+    return sanitized
 
 
 def log_usage_event(
@@ -28,11 +60,15 @@ def log_usage_event(
         "has_files": bool(has_files),
         "has_images": bool(has_images),
         "status": str(status or "").strip() or "success",
-        "error_summary": str(error_summary or "").strip(),
+        "error_summary": sanitize_error_summary(error_summary),
     }
-    USAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(USAGE_LOG_FILE, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, ensure_ascii=True) + "\n")
+    try:
+        USAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(USAGE_LOG_FILE, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=True) + "\n")
+    except Exception:
+        # Logging must never break primary app workflows.
+        return
 
 
 def read_usage_events(*, limit: int = 100) -> list[dict[str, object]]:
@@ -80,4 +116,3 @@ def usage_counts(events: list[dict[str, object]] | None = None) -> dict[str, obj
         "by_feature": dict(feature_counter),
         "failures_by_feature": dict(failure_counter),
     }
-

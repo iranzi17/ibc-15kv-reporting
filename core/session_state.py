@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +7,11 @@ from pathlib import Path
 import streamlit as st
 
 from config import BASE_DIR
+from services.local_state_store import (
+    default_ai_memory_state,
+    load_ai_memory_state,
+    persist_ai_memory_state as persist_ai_memory_state_to_disk,
+)
 
 OPENAI_API_KEY_SESSION_KEY = "openai_api_key"
 OPENAI_CHAT_MESSAGES_KEY = "openai_chat_messages"
@@ -78,52 +82,19 @@ def utc_timestamp() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _load_json_store(path: Path, default: dict[str, object]) -> dict[str, object]:
-    """Load a small JSON store with graceful fallback."""
-    try:
-        if path.exists():
-            with open(path, "r", encoding="utf-8") as handle:
-                payload = json.load(handle)
-            if isinstance(payload, dict):
-                return payload
-    except Exception:
-        pass
-    return default.copy()
-
-
-def _save_json_store(path: Path, payload: dict[str, object]) -> bool:
-    """Persist a small JSON store."""
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=True, indent=2)
-    except Exception:
-        return False
-    return True
-
-
-def default_ai_memory_state() -> dict[str, object]:
-    """Return the default persisted AI-memory structure."""
-    return {
-        "saved_guidance": [],
-        "maintenance_backlog": [],
-        "runtime_issues": [],
-    }
-
-
 def ai_memory_state() -> dict[str, object]:
     """Return the cached AI-memory store from session state."""
     state = st.session_state.get(AI_MEMORY_STATE_KEY)
     if isinstance(state, dict):
         return state
-    loaded = _load_json_store(AI_MEMORY_FILE, default_ai_memory_state())
+    loaded = load_ai_memory_state(AI_MEMORY_FILE)
     st.session_state[AI_MEMORY_STATE_KEY] = loaded
     return loaded
 
 
 def persist_ai_memory_state() -> bool:
     """Persist the current AI-memory store."""
-    return _save_json_store(AI_MEMORY_FILE, ai_memory_state())
+    return persist_ai_memory_state_to_disk(AI_MEMORY_FILE, ai_memory_state())
 
 
 def saved_guidance_items() -> list[dict[str, object]]:

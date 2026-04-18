@@ -12,7 +12,7 @@ from core.session_state import (
     LOCKABLE_CONVERTER_FIELDS,
     PARSED_CONTRACTOR_REPORTS_KEY,
 )
-from report_structuring import clean_and_structure_report
+from report_structuring import REPORT_HEADERS, clean_and_structure_report
 from services.converter_service import (
     apply_field_locks,
     prepare_refinement_inputs,
@@ -141,6 +141,11 @@ def clear_cached_sheet_data() -> None:
     clear_fn = getattr(get_sheet_data, "clear", None)
     if callable(clear_fn):
         clear_fn()
+
+
+def rows_for_sheet_append(rows: list[dict[str, str]]) -> list[list[str]]:
+    """Return rows ordered by canonical report headers for Google Sheet append."""
+    return [[str(row.get(header, "") or "").strip() for header in REPORT_HEADERS] for row in rows]
 
 
 def render_converter_workspace(
@@ -366,7 +371,7 @@ def render_converter_workspace(
                     st.warning(error)
             else:
                 try:
-                    append_rows_to_sheet([[row.get(header, "").strip() for header in parsed_df.columns] for row in edited_rows])
+                    append_rows_to_sheet(rows_for_sheet_append(edited_rows))
                     clear_cached_sheet_data()
                 except Exception as exc:
                     st.error(f"Failed to append converted rows to Google Sheet: {exc}")
