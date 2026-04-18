@@ -100,6 +100,7 @@ class _StreamlitStub:
 def _patch_layout(monkeypatch):
     monkeypatch.setattr(helpers, "st", reporting_workspace.st)
     monkeypatch.setattr(reporting_workspace, "render_workspace_topbar", lambda *_, **__: None)
+    monkeypatch.setattr(reporting_workspace, "render_live_updates_shell", lambda *_, **__: None)
     monkeypatch.setattr(reporting_workspace, "render_card_header", lambda *_, **__: None)
     monkeypatch.setattr(reporting_workspace, "render_kpi_strip", lambda *_, **__: None)
     monkeypatch.setattr(reporting_workspace, "render_note", lambda *_, **__: None)

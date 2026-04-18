@@ -57,6 +57,19 @@ def safe_checkbox(label: str, *, value=False, key=None):
     return value
 
 
+def safe_toggle(label: str, *, value=False, key=None, **kwargs):
+    toggle_fn = getattr(st, "toggle", None)
+    if callable(toggle_fn):
+        try:
+            return toggle_fn(label, value=value, key=key, **kwargs)
+        except TypeError:
+            try:
+                return toggle_fn(label, value=value, key=key)
+            except TypeError:
+                return toggle_fn(label)
+    return safe_checkbox(label, value=value, key=key)
+
+
 def safe_caption(text: str) -> None:
     caption_fn = getattr(st, "caption", None)
     if callable(caption_fn):

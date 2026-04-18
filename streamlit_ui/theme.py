@@ -69,8 +69,8 @@ def apply_professional_theme() -> None:
         }
 
         .ops-page-header {
-            padding: 1rem 1.15rem 1.05rem 1.15rem;
-            margin-bottom: 1rem;
+            padding: 1rem 1.15rem 1.08rem 1.15rem;
+            margin-bottom: 0.9rem;
         }
 
         .ops-page-eyebrow {
@@ -102,9 +102,29 @@ def apply_professional_theme() -> None:
             line-height: 1.55;
         }
 
+        .ops-page-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.48rem;
+            margin-top: 0.8rem;
+        }
+
+        .ops-page-meta-item {
+            display: inline-flex;
+            align-items: center;
+            min-height: 30px;
+            padding: 0.34rem 0.72rem;
+            border-radius: 999px;
+            background: var(--panel-bg-soft);
+            border: 1px solid var(--panel-border);
+            color: var(--muted);
+            font-size: 0.79rem;
+            font-weight: 600;
+        }
+
         .ops-workspace-topbar {
             padding: 1rem 1.1rem;
-            margin: 0.2rem 0 0.9rem 0;
+            margin: 0.2rem 0 0.55rem 0;
         }
 
         .ops-topbar-row,
@@ -291,6 +311,104 @@ def apply_professional_theme() -> None:
             font-size: 0.92rem;
         }
 
+        .ops-live-shell {
+            padding: 0.15rem 0 0.2rem 0;
+        }
+
+        .ops-live-shell-label {
+            color: var(--ink);
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-bottom: 0.15rem;
+        }
+
+        .ops-live-shell-text {
+            color: var(--muted);
+            font-size: 0.9rem;
+            line-height: 1.45;
+        }
+
+        .ops-live-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            padding: 0.65rem 0.88rem;
+            margin: 0.2rem 0 0.95rem 0;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-card);
+            overflow: hidden;
+        }
+
+        .ops-live-bar--quiet {
+            background: var(--panel-bg-soft);
+        }
+
+        .ops-live-bar-label {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 0.28rem 0.62rem;
+            border-radius: 999px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            font-size: 0.74rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+
+        .ops-live-bar-track {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 0.6rem;
+            align-items: stretch;
+            min-width: 0;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+
+        .ops-live-bar-track::-webkit-scrollbar {
+            display: none;
+        }
+
+        .ops-live-bar-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            min-height: 34px;
+            padding: 0.34rem 0.68rem;
+            border-radius: 999px;
+            background: var(--panel-bg-soft);
+            border: 1px solid var(--panel-border);
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+
+        .ops-live-bar-title {
+            color: var(--ink);
+            font-size: 0.88rem;
+            font-weight: 600;
+        }
+
+        .ops-live-bar-context {
+            color: var(--muted);
+            font-size: 0.78rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .ops-live-bar-empty {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
         div[data-testid="stVerticalBlockBorderWrapper"] {
             background: var(--panel-bg);
             border: 1px solid var(--panel-border);
@@ -340,10 +458,16 @@ def apply_professional_theme() -> None:
         div[data-testid="stMultiSelect"] label,
         div[data-testid="stRadio"] label,
         div[data-testid="stSlider"] label,
-        div[data-testid="stCheckbox"] label {
+        div[data-testid="stCheckbox"] label,
+        div[data-testid="stToggle"] label {
             font-size: 0.84rem;
             font-weight: 600;
             color: var(--muted);
+        }
+
+        div[data-testid="stToggle"] {
+            display: flex;
+            justify-content: flex-end;
         }
 
         div[role="radiogroup"] {
@@ -428,6 +552,11 @@ def render_app_header() -> None:
           <p class="ops-page-subtitle">
             Daily site reporting, consultant review, photo tracking, and final report export in one operational workspace.
           </p>
+          <div class="ops-page-meta">
+            <span class="ops-page-meta-item">Reporting shell</span>
+            <span class="ops-page-meta-item">Operational controls</span>
+            <span class="ops-page-meta-item">Live updates optional</span>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
