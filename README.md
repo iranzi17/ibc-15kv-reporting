@@ -1,182 +1,215 @@
-# IBC 15kV Reporting
+# IBC Reporting Platform
 
-This Streamlit app helps generate daily electrical consultant reports.
+Professional reporting workspace for daily site supervision, contractor-to-consultant report conversion, Google Sheets review, and final DOCX report generation.
 
-## Providing Google Credentials
+The app is designed first for operational users:
+- site engineers
+- supervisors
+- consultants
+- reporting and controls staff
 
-The app also needs access to your reporting Google Sheet. Create a Google
-service account and download its credential JSON file. Add the full JSON
-contents under the key `GOOGLE_CREDENTIALS` in the same
-`.streamlit/secrets.toml` file:
+AI features remain available, but they now sit behind the reporting workflow instead of defining the product identity.
 
-```
+## Product Structure
+
+The Streamlit app is organized into four workspaces:
+
+1. **Reporting Workspace**
+   - discipline, site, and date filters
+   - review and edit rows from Google Sheets
+   - attach site photos by site/date pair
+   - generate final ZIP exports with the canonical report engine
+
+2. **Contractor Conversion**
+   - paste contractor text
+   - attach source documents, images, and audio
+   - convert to consultant rows
+   - refine with strict source-grounded controls and field locking
+   - append approved rows to Google Sheets
+
+3. **Advanced AI Tools**
+   - shared project reference uploads
+   - saved reusable AI guidance
+   - research assistant
+   - secondary general AI assistant
+   - spreadsheet analyst
+
+4. **System Diagnostics & Maintenance**
+   - runtime issue history
+   - OpenAI usage log
+   - safe maintenance actions
+   - maintenance backlog
+
+## Canonical Modules Preserved
+
+These modules remain the canonical sources of truth:
+
+- `report.py`
+  DOCX generation, gallery composition, signatories, captions, ZIP export
+- `report_structuring.py`
+  canonical `REPORT_HEADERS`, local parser, alias resolution
+- `sheets.py`
+  Google Sheets access, append operations, offline cache helpers
+- `config.py`
+  application configuration and env/file overrides
+- `api.py`
+  FastAPI/mobile/backend interface that shares the same report and schema assumptions
+
+The refactor builds around those files instead of creating parallel implementations.
+
+## New Architecture
+
+The previous `app.py` god-file was split into clearer layers:
+
+- `app.py`
+  thin Streamlit orchestrator and compatibility surface
+- `core/session_state.py`
+  session-state keys, persistent AI memory, runtime issue store, reset helpers
+- `services/openai_client.py`
+  OpenAI key/model loading, SDK checks, general assistant requests
+- `services/converter_service.py`
+  contractor conversion/refinement logic, normalization, validation, locking, change summaries
+- `services/media_service.py`
+  file/input helpers, transcription, image captioning, text-to-speech
+- `services/research_service.py`
+  research assistant, tool routing, file search, spreadsheet analysis
+- `services/self_healing_service.py`
+  maintenance analysis helper
+- `services/usage_logging.py`
+  lightweight JSONL usage log for OpenAI-powered actions
+- `streamlit_ui/theme.py`
+  restrained professional theme
+- `streamlit_ui/layout.py`
+  reusable section, note, and KPI helpers
+- `streamlit_ui/reporting_workspace.py`
+  main reporting workflow
+- `streamlit_ui/converter_workspace.py`
+  contractor conversion/refinement workflow
+- `streamlit_ui/advanced_ai_workspace.py`
+  optional AI support tools
+- `streamlit_ui/diagnostics_workspace.py`
+  diagnostics and maintenance console
+
+## OpenAI Configuration
+
+Add your OpenAI API key either to Streamlit secrets or the environment:
+
+```toml
 # .streamlit/secrets.toml
+OPENAI_API_KEY = "your-openai-api-key"
+OPENAI_MODEL = "gpt-4o-mini"
+```
+
+Or:
+
+```powershell
+$env:OPENAI_API_KEY = "your-openai-api-key"
+$env:OPENAI_MODEL = "gpt-4o-mini"
+```
+
+The advanced assistant settings panel also accepts a session-only API key in the browser.
+
+## Google Credentials
+
+The app needs access to the reporting Google Sheet. Add the service account JSON to Streamlit secrets:
+
+```toml
 GOOGLE_CREDENTIALS = """
 { "type": "service_account", "project_id": "...", ... }
 """
 ```
 
-The credentials are parsed with `json.loads(st.secrets["GOOGLE_CREDENTIALS"])`
-when the app starts. For backwards compatibility, an older
-`gcp_service_account` key is also accepted if present.
+The legacy `gcp_service_account` secret is still accepted for backward compatibility.
 
-To enable the in-app ChatGPT assistant, add your OpenAI key to the same file
-or export it as an environment variable:
+## Trust Controls In Contractor Conversion
 
-```
-OPENAI_API_KEY = "your-openai-api-key"
-OPENAI_MODEL = "gpt-4o-mini"
-```
+The contractor workflow includes stronger controls than the earlier implementation:
 
-You can also paste the key into the ChatGPT settings panel inside the app for
-the current browser session only.
+- **Strict source-grounded mode**
+  When enabled, AI is instructed to leave unsupported fields empty instead of inventing or expanding content.
+- **Field locking**
+  Lock `Date`, `Site_Name`, `District`, `Work_Executed`, `Comment_on_work`, or `challenges` before reconversion or refinement.
+- **Change summaries**
+  Refinements show compact field-level change summaries so updates do not happen silently.
+- **Deterministic normalization**
+  Whitespace, repeated punctuation, and obvious placeholder values are normalized without inventing data.
 
-## OpenAI Workflows In The App
+## Diagnostics And Usage Logging
 
-The Streamlit app now includes a broader OpenAI-powered workspace:
+OpenAI-powered features write lightweight local usage events to:
 
-- **AI Memory**: save reusable instructions so the converter, captions, research assistant, and maintenance workflows can reuse them without retyping.
-- **Project Knowledge Base**: upload standards, procedures, approved reports, or client instructions. The app uses OpenAI file search so the converter and research assistant can reference those documents.
-- **Contractor Report Converter**: convert not only pasted text, but also uploaded PDFs, spreadsheets, images, and site photos into the 14 consultant-report fields.
-- **Voice note transcription**: upload audio notes (`mp3`, `m4a`, `wav`, `webm`, etc.) and append the transcript directly into the contractor report text before conversion.
-- **Refinement chat**: continue chatting with the converter after the first conversion so it rewrites the rows directly from your instructions.
-- **AI photo captions**: when report photos are uploaded, the app can generate short captions from the image plus the report-row context and place them directly onto the report gallery.
-- **Research workspace**: ask standards, wording, compliance, or best-practice questions with optional web research and project-document search.
-- **Spreadsheet analyst**: upload CSV/XLSX/JSON/PDF data files and let OpenAI Code Interpreter inspect them for anomalies, totals, missing data, and progress insights.
-- **Readback audio**: generate spoken MP3 summaries for research answers and spreadsheet analysis.
-- **Self-healing workspace**: collect recent runtime issues, apply safe reset actions inside the session, analyze pasted errors with ChatGPT, and store improvement ideas in a maintenance backlog.
+- `openai_usage_log.jsonl`
 
-Notes:
+Each event records only known values:
 
-- File-search uploads are sent to OpenAI as temporary vector-store content when needed by the app.
-- Web research is optional and may increase latency and API cost.
-- Tool-heavy workflows automatically switch to a GPT-5 family model when your default model does not support the needed tool reliably.
+- timestamp
+- feature name
+- model
+- whether files were present
+- whether images were present
+- status
+- error summary when a request failed
 
-## Configuration
+The diagnostics workspace also shows:
 
-Application settings can be supplied through environment variables or by
-placing a `config.json` or `config.toml` file in the project root.  A custom
-configuration file path may also be provided via the `APP_CONFIG` environment
-variable.  Settings from environment variables take precedence over values from
-the configuration file.
+- recent usage events
+- recent runtime issues
+- safe maintenance actions
+- maintenance backlog items
 
-Supported options:
+Persistent reusable AI guidance and runtime issue state are stored locally in:
 
-| Name | Description | Default |
-| ---- | ----------- | ------- |
-| `TEMPLATE_PATH` | Path to the Word report template used when generating documents. | `Site_Daily_report_Template_Date.docx` |
-| `SHEET_ID` | ID of the Google Sheet that stores report data. | `1t6Bmm3YN7mAovNM3iT7oMGeXG3giDONSejJ9gUbUeCI` |
-| `SHEET_NAME` | Worksheet within the Google Sheet from which to read data. | `Reports` |
-| `CACHE_FILE` | File used to cache offline data before syncing. | `offline_cache.json` in the project directory |
-| `DISCIPLINE_COL` | Column number for the "Discipline" field in the sheet. | `11` |
+- `ai_memory_store.json`
 
-Example `config.toml`:
+Both local store files are ignored by Git.
 
-```toml
-SHEET_ID = "your-google-sheet-id"
-SHEET_NAME = "Reports"
+## Running The App
+
+Install dependencies:
+
+```powershell
+pip install -r requirements.txt
 ```
 
-## Google Sheet Setup
+Run Streamlit:
 
-The app expects data in a Google Sheet named **Reports**. Columns **A** through
-**N** should have the following headings starting in row&nbsp;1. Use the exact
-names shown below so the app can map your data automatically:
-
-1. **Date** - The report date in `dd.mm.YYYY`, `dd/mm/YYYY`, or `YYYY-mm-dd`
-   format.
-2. **Site_Name** - Name of the site.
-3. **District** - District or location of the site.
-4. **Work** - Summary of planned or ongoing work.
-5. **Human_Resources** - Staffing information for the day.
-6. **Supply** - Materials delivered or required.
-7. **Work_Executed** - Activities executed during the day.
-8. **Comment_on_work** - Additional notes about the work performed.
-9. **Another_Work_Executed** - Any supplementary tasks completed.
-10. **Comment_on_HSE** - Health, safety, and environment notes.
-11. **Consultant_Recommandation** - Recommendations from the consultant.
-12. **Non_Compliant_work** - Items that do not meet compliance expectations.
-13. **Reaction_and_WayForword** - Follow-up actions or responses (the template
-    previously labelled this column as "Reaction & Way Forward").
-14. **challenges** - Issues encountered on site.
-
-The application reads rows starting from **A2** and expects the above order. If
-any columns are missing, empty strings will be substituted when generating
-reports.
-
-## Mobile/API entry point
-
-A lightweight FastAPI service in `api.py` lets a mobile client submit daily reports to the same Google Sheet. Start it with:
-
+```powershell
+streamlit run app.py
 ```
+
+For consistency on Windows, using the project virtual environment is preferred:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
+
+## FastAPI / Mobile Entry Point
+
+The FastAPI service in `api.py` is still available for mobile or backend integration:
+
+```powershell
 uvicorn api:app --reload --port 8000
 ```
 
-Or on Windows:
+Shared behaviors remain intact:
 
-```
-run_mobile_api.bat
-```
+- `/schema` exposes the same canonical `REPORT_HEADERS`
+- report exports still use `report.py`
+- mobile submissions still write to the same Google Sheet
 
-Use the same service-account JSON as the Streamlit app (set `GOOGLE_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS`).
+## Testing
 
-Endpoints:
-- `GET /health` to verify credentials
-- `GET /auth/config` returns whether email login is enabled/required
-- `POST /auth/request-code` sends a one-time email login code
-- `POST /auth/verify-code` exchanges the code for a session token
-- `GET /schema` returns the exact Google Sheet headers used by the app
-- `GET /sites` returns the site list from the sheet
-- `POST /reports` accepts the daily report payload
-- `POST /reports/export` returns a ZIP of generated DOCX reports for the requested site/date filters
+Run the test suite with:
 
-```
-{
-  "date": "2025-08-06",
-  "site_name": "Kigali 15kV Switch",
-  "district": "Kicukiro",
-  "work": "Trench excavation",
-  "human_resources": "5 technicians",
-  "supply": "Cables, poles",
-  "work_executed": "Excavated 120 m",
-  "comment_on_work": "No blockers",
-  "another_work_executed": "Cable pulling",
-  "comment_on_hse": "PPE compliant",
-  "consultant_recommandation": "Proceed with backfilling",
-  "non_compliant_work": "None",
-  "reaction_and_wayforword": "Continue tomorrow",
-  "challenges": "Rain"
-}
+```powershell
+py -3.12 -m pytest -q
 ```
 
-This keeps the service account on the server; the Android client only calls the API.
+The refactor adds direct tests for:
 
-Export example:
+- converter validation and field locking
+- change summary behavior
+- usage logging summaries
+- existing OpenAI helper flows
+- reporting/export compatibility
 
-```
-{
-  "discipline": "Electrical",
-  "sites": ["Kigali 15kV Switch"],
-  "dates": ["2025-08-06"]
-}
-```
-
-The export endpoint reuses the same report generator as Streamlit, so the mobile app can download report ZIPs without opening the Streamlit UI.
-
-Optional email login for the mobile app can be configured with:
-- `MOBILE_AUTH_REQUIRED=true` to require login before `GET /sites`, `POST /reports`, and `POST /reports/export`
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, `SMTP_USE_TLS`
-- `MOBILE_LOGIN_CODE_TTL_MINUTES` and `MOBILE_SESSION_TTL_HOURS` to control code/session lifetime
-- `MOBILE_ALLOWED_EMAILS` or `MOBILE_ALLOWED_EMAIL_DOMAINS` to restrict who can sign in
-
-The Android app in `mobile/android-app/` now lets the user enter the API server URL inside the app, mirrors the 14 Google Sheet headers from `/schema`, and supports email-code login when the backend has it enabled.
-
-## Free public access without a card
-
-For zero-cost public access during early testing, use the Cloudflare Quick Tunnel flow in `DEPLOY_FREE.md`.
-
-Launcher files:
-- `run_mobile_public.bat`
-- `run_mobile_public.ps1`
-
-This keeps the Google credential on the computer running the API and gives the phone a temporary HTTPS URL. The URL changes each time the tunnel restarts, so this is suitable for testing and early internal use, not a final production deployment.

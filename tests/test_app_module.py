@@ -126,123 +126,69 @@ class _UploadedFileStub:
         return self._data
 
 
-def test_run_app_excludes_header_rows(monkeypatch):
-    sheet_rows = [
-        HEADERS,
-        [
-            "2024-01-01",
-            "Site A",
-            "District 1",
-            "Work details A",
-            "Crew A",
-            "Supply A",
-            "Executed A",
-            "Comment A",
-            "Another Executed A",
-            "HSE A",
-            "Recommendation A",
-            "Non compliant A",
-            "Reaction A",
-            "Challenges A",
-        ],
-        [
-            "2024-01-02",
-            "Site B",
-            "District 2",
-            "Work details B",
-            "Crew B",
-            "Supply B",
-            "Executed B",
-            "Comment B",
-            "Another Executed B",
-            "HSE B",
-            "Recommendation B",
-            "Non compliant B",
-            "Reaction B",
-            "Challenges B",
-        ],
-    ]
+def test_run_app_orchestrates_workspace_sections(monkeypatch):
+    calls = []
 
-    monkeypatch.setattr(app, "get_sheet_data", lambda: sheet_rows)
-    monkeypatch.setattr(app, "load_offline_cache", lambda: None)
-    monkeypatch.setattr(app, "generate_reports", lambda *_, **__: b"zip-bytes")
-    monkeypatch.setattr(app, "set_background", lambda *_: None)
-    monkeypatch.setattr(app, "render_workwatch_header", lambda *_: None)
+    monkeypatch.setattr(app, "apply_professional_theme", lambda: calls.append("theme"))
+    monkeypatch.setattr(app, "render_app_header", lambda: calls.append("header"))
+    monkeypatch.setattr(app, "render_project_knowledge_base_panel", lambda: ["knowledge.pdf"])
 
-    st_stub = _StreamlitStub()
+    def _fake_reporting_workspace(**kwargs):
+        calls.append(("reporting", sorted(kwargs)))
+
+    def _fake_converter_workspace(discipline, **kwargs):
+        calls.append(("converter", discipline, sorted(kwargs)))
+
+    def _fake_advanced_workspace(discipline, **kwargs):
+        calls.append(("advanced", discipline, sorted(kwargs)))
+
+    monkeypatch.setattr(app, "render_reporting_workspace", _fake_reporting_workspace)
+    monkeypatch.setattr(app, "render_converter_workspace", _fake_converter_workspace)
+    monkeypatch.setattr(app, "render_advanced_ai_workspace", _fake_advanced_workspace)
+    monkeypatch.setattr(app, "render_diagnostics_workspace", lambda: calls.append("diagnostics"))
+
+    st_stub = types.SimpleNamespace(session_state={"discipline_radio": "Electrical"})
     monkeypatch.setattr(app, "st", st_stub)
 
     app.run_app()
 
-    site_multiselect = st_stub.multiselect_calls[0][1]
-    date_multiselect = st_stub.multiselect_calls[1][1]
-
-    assert "Site_Name" not in site_multiselect
-    assert site_multiselect == ["All Sites", "Site A", "Site B"]
-
-    assert "Date" not in date_multiselect
-    assert date_multiselect == ["All Dates", "2024-01-01", "2024-01-02"]
-
-    preview_df = st_stub.dataframe_capture
-    assert preview_df.values.tolist() == [
-        sheet_rows[1],
-        sheet_rows[2],
-    ]
-
-    assert "Upload project knowledge files" in st_stub.uploader_labels
-    assert "Upload spreadsheets or datasets" in st_stub.uploader_labels
-    assert "Upload images for Site A - 2024-01-01" in st_stub.uploader_labels
-    assert "Upload images for Site B - 2024-01-02" in st_stub.uploader_labels
-
-    structured_report = st_stub.session_state.get("structured_report_data")
-    assert isinstance(structured_report, list)
-    assert [row["Site_Name"] for row in structured_report] == ["Site A", "Site B"]
-    assert st_stub.json_value == structured_report
+    assert calls[0:2] == ["theme", "header"]
+    assert calls[2][0] == "reporting"
+    assert calls[3][0] == "converter"
+    assert calls[3][1] == "Electrical"
+    assert calls[4][0] == "advanced"
+    assert calls[4][1] == "Electrical"
+    assert calls[5] == "diagnostics"
 
 
-def test_run_app_generates_reports_when_button_clicked(monkeypatch):
-    sheet_rows = [
-        HEADERS,
-        [
-            "2024-01-01",
-            "Site A",
-            "District 1",
-            "Work details A",
-            "Crew A",
-            "Supply A",
-            "Executed A",
-            "Comment A",
-            "Another Executed A",
-            "HSE A",
-            "Recommendation A",
-            "Non compliant A",
-            "Reaction A",
-            "Challenges A",
-        ],
-    ]
+def test_run_app_defaults_discipline_for_secondary_workspaces(monkeypatch):
+    captured = {}
 
-    monkeypatch.setattr(app, "get_sheet_data", lambda: sheet_rows)
-    monkeypatch.setattr(app, "load_offline_cache", lambda: None)
-    generated = {}
+    monkeypatch.setattr(app, "apply_professional_theme", lambda: None)
+    monkeypatch.setattr(app, "render_app_header", lambda: None)
+    monkeypatch.setattr(app, "render_project_knowledge_base_panel", lambda: [])
+    monkeypatch.setattr(app, "render_reporting_workspace", lambda **kwargs: None)
+    monkeypatch.setattr(
+        app,
+        "render_converter_workspace",
+        lambda discipline, **kwargs: captured.setdefault("converter", discipline),
+    )
+    monkeypatch.setattr(
+        app,
+        "render_advanced_ai_workspace",
+        lambda discipline, **kwargs: captured.setdefault("advanced", discipline),
+    )
+    monkeypatch.setattr(app, "render_diagnostics_workspace", lambda: None)
 
-    def fake_generate(filtered_rows, *_args, **_kwargs):
-        generated["rows"] = filtered_rows
-        return b"zip-bytes"
-
-    monkeypatch.setattr(app, "generate_reports", fake_generate)
-    monkeypatch.setattr(app, "set_background", lambda *_: None)
-    monkeypatch.setattr(app, "render_workwatch_header", lambda *_: None)
-
-    st_stub = _StreamlitStub()
-    st_stub.download_called = False
-    st_stub.button_states["Generate Reports"] = True
+    st_stub = types.SimpleNamespace(session_state={})
     monkeypatch.setattr(app, "st", st_stub)
 
     app.run_app()
 
-    assert generated["rows"] == [sheet_rows[1]]
-    assert st_stub.download_called is True
-    assert "Paste contractor report text" not in st_stub.text_area_calls
+    assert captured == {
+        "converter": "Civil",
+        "advanced": "Civil",
+    }
 
 
 def test_load_openai_api_key_prefers_session_env_then_secrets(monkeypatch):
