@@ -34,6 +34,7 @@ from streamlit_ui.layout import (
     render_status_badges,
     render_workspace_topbar,
 )
+from streamlit_ui.news_bar import render_live_updates_shell
 
 
 def load_sheet_context(*, get_sheet_data_fn=get_sheet_data, get_unique_sites_and_dates_fn=get_unique_sites_and_dates):
@@ -129,7 +130,7 @@ def sanitize_multiselect_state(key: str, valid_options: list[str]) -> None:
 
 def selection_summary_text(selected_values: list[str], *, total_count: int, noun: str) -> str:
     if not selected_values:
-        return f"{noun.title()}: All"
+        return f"{noun.title()}: All {total_count}"
     suffix = "" if len(selected_values) == 1 else "s"
     return f"{noun.title()}: {len(selected_values)} selected {noun}{suffix}"
 
@@ -162,6 +163,16 @@ def count_attached_photo_groups(site_date_pairs: list[tuple[str, str]], image_ma
         if images:
             attached += 1
     return attached
+
+
+def photo_group_display_label(site: str, date: str, image_group: list[bytes], captions: list[str]) -> str:
+    """Return an ASCII-only upload label for photo group expanders."""
+    label = f"{site} | {date}"
+    if image_group and captions:
+        return f"{label} - Ready - Captions cached"
+    if image_group:
+        return f"{label} - Photos attached"
+    return f"{label} - No photos"
 
 
 def render_output_settings_panel() -> dict[str, object]:
@@ -229,6 +240,7 @@ def render_reporting_workspace(
         badge="Operational workspace",
         meta=["Sheet review", "Photo tracking", "DOCX / ZIP export"],
     )
+    render_live_updates_shell()
 
     data_rows, sites, data_error = load_sheet_context(
         get_sheet_data_fn=get_sheet_data_fn,
@@ -335,6 +347,7 @@ def render_reporting_workspace(
             ("Sites", len({row[1].strip() for row in filtered_rows}), "Unique sites represented in this export."),
             ("Site/date sets", len(site_date_pairs), "Distinct report groups for upload and export."),
             ("Photo groups ready", attached_photo_groups, "Site/date groups that already have attached photos."),
+            ("Missing photo groups", missing_photo_groups, "Groups that still need photo attachments before export."),
         ]
     )
 
@@ -383,7 +396,7 @@ def render_reporting_workspace(
             captions = captions if isinstance(captions, list) else []
 
             with safe_expander(
-                photo_group_label(site.strip(), date.strip(), image_group, captions),
+                photo_group_display_label(site.strip(), date.strip(), image_group, captions),
                 expanded=False,
             ):
                 render_status_badges(photo_group_statuses(image_group, captions))
