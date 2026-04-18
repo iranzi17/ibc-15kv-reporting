@@ -1,7 +1,6 @@
 """Utilities for structuring contractor reports locally without external APIs."""
 from __future__ import annotations
 
-import re
 from typing import Dict, List, Optional, Union
 
 REPORT_HEADERS: List[str] = [
@@ -21,10 +20,26 @@ REPORT_HEADERS: List[str] = [
     "challenges",
 ]
 
+
+def _normalise_header_key(raw_key: str) -> str:
+    normalised_characters: List[str] = []
+    pending_separator = False
+
+    for character in str(raw_key or "").lower():
+        if character.isalnum():
+            if pending_separator and normalised_characters:
+                normalised_characters.append("_")
+            normalised_characters.append(character)
+            pending_separator = False
+            continue
+        pending_separator = True
+
+    return "".join(normalised_characters)
+
+
 # Normalised header names mapped to the canonical header used in REPORT_HEADERS.
 _HEADER_ALIASES = {
-    re.sub(r"[^a-z0-9]+", "_", header.lower()).strip("_"): header
-    for header in REPORT_HEADERS
+    _normalise_header_key(header): header for header in REPORT_HEADERS
 }
 
 # Common human-readable variants mapped to canonical headers.
@@ -55,10 +70,6 @@ _HEADER_ALIASES.update(
         "challenges": "challenges",
     }
 )
-
-_KEY_VALUE_PATTERN = re.compile(r"^\s*([A-Za-z0-9_\-/ ]+?)\s*[:\-]\s*(.*)$")
-_SECTION_SPLIT_PATTERN = re.compile(r"\n\s*-{3,}\s*\n")
-
 
 def clean_and_structure_report(
     raw_report_text: str,
@@ -104,8 +115,21 @@ def _split_into_sections(raw_report_text: str) -> List[str]:
     if not stripped:
         return []
 
-    sections = _SECTION_SPLIT_PATTERN.split(stripped)
-    return [section.strip() for section in sections if section.strip()]
+    sections: List[str] = []
+    current_lines: List[str] = []
+    for line in stripped.splitlines():
+        if _is_section_divider(line):
+            section = "\n".join(current_lines).strip()
+            if section:
+                sections.append(section)
+            current_lines = []
+            continue
+        current_lines.append(line)
+
+    section = "\n".join(current_lines).strip()
+    if section:
+        sections.append(section)
+    return sections
 
 
 def _parse_section(section: str) -> Dict[str, str]:
@@ -119,13 +143,13 @@ def _parse_section(section: str) -> Dict[str, str]:
         if not line:
             continue
 
-        match = _KEY_VALUE_PATTERN.match(line)
-        if match:
-            raw_key, value = match.groups()
+        parsed_line = _split_key_value_line(line)
+        if parsed_line:
+            raw_key, value = parsed_line
             header = _resolve_header(raw_key)
             if header is None:
                 header = "Comment_on_work"
-            result[header] = _append_value(result[header], value.strip())
+            result[header] = _append_value(result[header], value)
             current_header = header
             continue
 
@@ -140,7 +164,7 @@ def _parse_section(section: str) -> Dict[str, str]:
 def _resolve_header(raw_key: str) -> Optional[str]:
     """Return the canonical header name for the provided key string."""
 
-    normalised_key = re.sub(r"[^a-z0-9]+", "_", raw_key.lower()).strip("_")
+    normalised_key = _normalise_header_key(raw_key)
     if not normalised_key:
         return None
     return _HEADER_ALIASES.get(normalised_key)
@@ -161,6 +185,29 @@ def _append_value(current: str, addition: str) -> str:
     if not current:
         return addition
     return f"{current}\n{addition}"
+
+
+def _is_section_divider(line: str) -> bool:
+    stripped = line.strip()
+    return len(stripped) >= 3 and set(stripped) == {"-"}
+
+
+def _split_key_value_line(line: str) -> Optional[tuple[str, str]]:
+    for separator in (":", " - "):
+        if separator not in line:
+            continue
+        raw_key, value = line.split(separator, 1)
+        raw_key = raw_key.strip()
+        if _looks_like_header_key(raw_key):
+            return raw_key, value.strip()
+    return None
+
+
+def _looks_like_header_key(raw_key: str) -> bool:
+    candidate = raw_key.strip()
+    if not candidate or len(candidate) > 80:
+        return False
+    return all(character.isalnum() or character in " _-/" for character in candidate)
 
 
 __all__ = [

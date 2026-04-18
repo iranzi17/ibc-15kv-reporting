@@ -16,6 +16,8 @@ ENV/
 .streamlit/secrets.toml
 service-account.json
 service_account.json
+ai_memory_store.json
+openai_usage_log.jsonl
 
 # Packaging
 *.egg-info/
