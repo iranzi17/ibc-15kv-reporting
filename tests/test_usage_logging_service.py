@@ -27,6 +27,7 @@ def test_log_usage_event_and_readback(tmp_path, monkeypatch):
 
     assert len(events) == 2
     assert events[0]["feature_name"] == "research_assistant"
+    assert events[0]["error_summary_present"] is True
     assert events[1]["feature_name"] == "contractor_conversion"
     with open(log_path, "r", encoding="utf-8") as handle:
         raw_lines = [json.loads(line) for line in handle if line.strip()]
@@ -53,7 +54,7 @@ def test_sanitize_error_summary_redacts_and_truncates():
     assert len(sanitized) <= usage_logging.MAX_ERROR_SUMMARY_LENGTH + 3
 
 
-def test_log_usage_event_sanitizes_error_summary_before_write(tmp_path, monkeypatch):
+def test_log_usage_event_persists_only_safe_error_metadata(tmp_path, monkeypatch):
     log_path = tmp_path / "usage.jsonl"
     monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", log_path)
 
@@ -67,8 +68,29 @@ def test_log_usage_event_sanitizes_error_summary_before_write(tmp_path, monkeypa
     )
 
     payload = json.loads(log_path.read_text(encoding="utf-8").strip())
-    assert "topsecrettokenvalue" not in payload["error_summary"]
-    assert "[REDACTED" in payload["error_summary"]
+    assert payload["error_summary_present"] is True
+    assert payload["error_summary_category"] == "redacted_sensitive_content"
+    assert payload["error_summary_fingerprint"] == usage_logging.fingerprint_error_summary(
+        "authorization: Bearer topsecrettokenvalue"
+    )
+    assert "topsecrettokenvalue" not in log_path.read_text(encoding="utf-8")
+    assert "[REDACTED" not in log_path.read_text(encoding="utf-8")
+
+
+def test_log_usage_event_redacts_unexpected_model_identifiers(tmp_path, monkeypatch):
+    log_path = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", log_path)
+
+    usage_logging.log_usage_event(
+        feature_name="research_assistant",
+        model="gpt-5.4-mini secret=token",
+        has_files=False,
+        has_images=False,
+        status="failed",
+    )
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert payload["model"] == "[REDACTED_MODEL]"
 
 
 def test_usage_counts_summarizes_failures():

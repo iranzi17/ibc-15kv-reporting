@@ -44,6 +44,23 @@ def test_clean_and_structure_report_supports_multiple_sections():
     assert all(set(row) == set(REPORT_HEADERS) for row in result)
 
 
+def test_clean_and_structure_report_supports_indented_section_dividers():
+    raw_text = """
+    Date: 2024-04-01
+    Site: Site A
+    Work Executed: Completed trenching
+       ---
+    Date: 2024-04-02
+    Site Name: Site B
+    Work Executed: Cable laying in progress
+    """.strip()
+
+    result = clean_and_structure_report(raw_text)
+
+    assert isinstance(result, list)
+    assert [row["Site_Name"] for row in result] == ["Site A", "Site B"]
+
+
 @pytest.mark.parametrize("value", ["", "   ", "\n\n"])
 def test_clean_and_structure_report_requires_content(value):
     with pytest.raises(ValueError):
