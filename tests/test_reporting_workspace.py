@@ -1,4 +1,5 @@
 import pandas as pd
+import types
 
 from streamlit_ui import helpers
 from streamlit_ui import reporting_workspace
@@ -97,6 +98,15 @@ class _StreamlitStub:
         return None
 
 
+class _UploadedImageStub:
+    def __init__(self, name: str, data: bytes):
+        self.name = name
+        self._data = data
+
+    def getvalue(self):
+        return self._data
+
+
 def _patch_layout(monkeypatch):
     monkeypatch.setattr(helpers, "st", reporting_workspace.st)
     monkeypatch.setattr(reporting_workspace, "render_workspace_topbar", lambda *_, **__: None)
@@ -106,6 +116,7 @@ def _patch_layout(monkeypatch):
     monkeypatch.setattr(reporting_workspace, "render_note", lambda *_, **__: None)
     monkeypatch.setattr(reporting_workspace, "render_status_badges", lambda *_, **__: None)
     monkeypatch.setattr(reporting_workspace, "safe_image", lambda *_, **__: None)
+    monkeypatch.setattr(reporting_workspace, "render_clipboard_image_paste", lambda **_kwargs: [])
 
 
 def test_render_reporting_workspace_uses_empty_filter_defaults_and_preserves_all_scope(monkeypatch):
@@ -183,3 +194,17 @@ def test_render_reporting_workspace_caption_failure_uses_fallback_and_generates_
     assert captured_kwargs["image_caption_mapping"] == {("Site A", "2026-04-18"): ["", ""]}
     assert any("captions failed and were skipped" in message for message in st_stub.warning_messages)
     assert any(issue[0] == "photo_captioning" for issue in recorded_issues)
+
+
+def test_append_new_uploaded_images_does_not_duplicate_same_uploader_payload(monkeypatch):
+    st_stub = types.SimpleNamespace(session_state={})
+    monkeypatch.setattr(reporting_workspace, "st", st_stub)
+    files = [_UploadedImageStub("site.jpg", b"image-bytes")]
+
+    first = reporting_workspace.append_new_uploaded_images(("Site A", "2026-04-18"), files, upload_key="uploader")
+    second = reporting_workspace.append_new_uploaded_images(("Site A", "2026-04-18"), files, upload_key="uploader")
+    appended = reporting_workspace.append_images_to_group(("Site A", "2026-04-18"), [b"pasted-image"])
+
+    assert first == [b"image-bytes"]
+    assert second == [b"image-bytes"]
+    assert appended == [b"image-bytes", b"pasted-image"]

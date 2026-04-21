@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 import pandas as pd
 import streamlit as st
 
@@ -10,6 +12,7 @@ from services.converter_service import normalize_structured_rows
 from services.media_service import generate_ai_photo_captions_for_reports
 from services.openai_client import active_ai_provider, default_ai_model, load_ai_api_key, openai_sdk_ready, provider_label
 from sheets import CACHE_FILE, append_rows_to_sheet, get_sheet_data, get_unique_sites_and_dates, load_offline_cache
+from streamlit_ui.clipboard_image_paste import render_clipboard_image_paste
 from streamlit_ui.helpers import (
     safe_button,
     safe_caption,
@@ -173,6 +176,85 @@ def photo_group_display_label(site: str, date: str, image_group: list[bytes], ca
     if image_group:
         return f"{label} - Photos attached"
     return f"{label} - No photos"
+
+
+def append_images_to_group(normalized_key: tuple[str, str], images: list[bytes]) -> list[bytes]:
+    """Append images to the current site/date group and return the group."""
+    if not images:
+        return (st.session_state.get("images", {}) or {}).get(normalized_key, [])
+    image_store = st.session_state.setdefault("images", {})
+    current_group = list(image_store.get(normalized_key, []) or [])
+    current_group.extend(bytes(image) for image in images if image)
+    image_store[normalized_key] = current_group
+    st.session_state["images"] = image_store
+    return current_group
+
+
+def uploaded_file_bytes(uploaded_file: object) -> bytes:
+    """Read one uploaded file without permanently advancing its stream when possible."""
+    getvalue_fn = getattr(uploaded_file, "getvalue", None)
+    if callable(getvalue_fn):
+        return bytes(getvalue_fn() or b"")
+
+    read_fn = getattr(uploaded_file, "read", None)
+    if not callable(read_fn):
+        return b""
+
+    tell_fn = getattr(uploaded_file, "tell", None)
+    seek_fn = getattr(uploaded_file, "seek", None)
+    position = None
+    if callable(tell_fn):
+        try:
+            position = tell_fn()
+        except Exception:
+            position = None
+
+    data = bytes(read_fn() or b"")
+    if callable(seek_fn) and position is not None:
+        try:
+            seek_fn(position)
+        except Exception:
+            pass
+    return data
+
+
+def uploaded_image_signature(files: list[object]) -> str:
+    """Return a stable signature for uploaded image files."""
+    digest = hashlib.sha256()
+    for uploaded_file in files or []:
+        name = str(getattr(uploaded_file, "name", "") or "").strip()
+        data = uploaded_file_bytes(uploaded_file)
+        digest.update(name.encode("utf-8"))
+        digest.update(len(data).to_bytes(8, "big", signed=False))
+        digest.update(hashlib.sha256(data).digest())
+    return digest.hexdigest()
+
+
+def append_new_uploaded_images(
+    normalized_key: tuple[str, str],
+    files: list[object],
+    *,
+    upload_key: str,
+) -> list[bytes]:
+    """Append uploaded images once per uploader change."""
+    if not files:
+        return (st.session_state.get("images", {}) or {}).get(normalized_key, [])
+
+    signature = uploaded_image_signature(files)
+    signature_store = st.session_state.setdefault("_image_upload_signatures", {})
+    current_group = (st.session_state.get("images", {}) or {}).get(normalized_key, [])
+    if signature_store.get(upload_key) == signature and current_group:
+        return current_group
+
+    image_bytes: list[bytes] = []
+    for uploaded_file in files:
+        data = uploaded_file_bytes(uploaded_file)
+        if data:
+            image_bytes.append(data)
+
+    signature_store[upload_key] = signature
+    st.session_state["_image_upload_signatures"] = signature_store
+    return append_images_to_group(normalized_key, image_bytes)
 
 
 def render_output_settings_panel() -> dict[str, object]:
@@ -400,15 +482,22 @@ def render_reporting_workspace(
                 expanded=False,
             ):
                 render_status_badges(photo_group_statuses(image_group, captions))
+                uploader_key = f"uploader_{site}_{date}"
                 files = safe_file_uploader(
                     f"Upload images for {site} - {date}",
                     accept_multiple_files=True,
                     type=["png", "jpg", "jpeg", "webp"],
-                    key=f"uploader_{site}_{date}",
+                    key=uploader_key,
                 )
                 if files:
-                    st.session_state.setdefault("images", {})[normalized_key] = [f.read() for f in files]
-                    image_group = st.session_state["images"][normalized_key]
+                    image_group = append_new_uploaded_images(normalized_key, list(files), upload_key=uploader_key)
+                pasted_images = render_clipboard_image_paste(
+                    label=f"Paste copied images for {site} - {date}",
+                    key=f"clipboard_paste_{site}_{date}",
+                )
+                if pasted_images:
+                    image_group = append_images_to_group(normalized_key, pasted_images)
+                    st.success(f"Added {len(pasted_images)} pasted image(s) to {site} - {date}.")
                 if image_group:
                     safe_image(image_group, width=220)
                 if captions:

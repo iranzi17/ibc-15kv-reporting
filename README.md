@@ -17,7 +17,7 @@ The Streamlit app is organized into four workspaces:
 1. **Reporting Workspace**
    - discipline, site, and date filters
    - review and edit rows from Google Sheets
-   - attach site photos by site/date pair
+   - attach or paste site photos by site/date pair
    - generate final ZIP exports with the canonical report engine
 
 2. **Contractor Conversion**
