@@ -7,15 +7,24 @@ import streamlit as st
 
 from core.session_state import PROJECT_KNOWLEDGE_VECTOR_STORE_KEY
 from services.media_service import (
+    has_pdf_files,
     uploaded_file_bytes,
     uploaded_file_name,
     uploaded_file_names,
+    uploaded_files_to_chat_content,
     uploaded_files_signature,
     uploaded_files_to_response_input,
 )
 from services.openai_client import (
-    converter_model,
+    OPENAI_ONLY_RESPONSES_FEATURE_MESSAGE,
+    PROVIDER_OPENAI,
+    PROVIDER_OPENROUTER,
+    extract_chat_completion_text,
     extract_openai_output_text,
+    make_ai_client,
+    normalize_ai_provider,
+    provider_label,
+    provider_supports_openai_responses_tools,
     tool_enabled_model,
 )
 from services.usage_logging import log_usage_event
@@ -142,6 +151,23 @@ def converter_response_options(
     }
 
 
+def openrouter_chat_plugins(
+    *,
+    allow_web_research: bool = False,
+    include_file_parser: bool = False,
+    include_response_healing: bool = False,
+) -> list[dict[str, object]]:
+    """Return OpenRouter plugin configuration for chat-completion requests."""
+    plugins: list[dict[str, object]] = []
+    if allow_web_research:
+        plugins.append({"id": "web"})
+    if include_file_parser:
+        plugins.append({"id": "file-parser", "pdf": {"engine": "cloudflare-ai"}})
+    if include_response_healing:
+        plugins.append({"id": "response-healing"})
+    return plugins
+
+
 def knowledge_vector_store_cache() -> dict[str, object]:
     return st.session_state.setdefault(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY, {})
 
@@ -150,10 +176,13 @@ def ensure_knowledge_vector_store(
     files: list[object],
     *,
     api_key: str,
+    provider: str | None = PROVIDER_OPENAI,
 ) -> tuple[str, list[str]]:
     """Upload knowledge files to an ephemeral vector store and return its id."""
     if not files:
         return "", []
+    if not provider_supports_openai_responses_tools(provider):
+        return "", uploaded_file_names(files)
 
     filenames = uploaded_file_names(files)
     signature = uploaded_files_signature(files)
@@ -220,9 +249,11 @@ def request_research_assistant_reply(
     knowledge_vector_store_id: str = "",
     persistent_guidance: str = "",
     conversation_transcript: str = "",
+    supporting_files: list[object] | None = None,
+    provider: str | None = PROVIDER_OPENAI,
 ) -> tuple[str, list[dict[str, str]]]:
     """Answer a research or standards question using web/file search when enabled."""
-    from openai import OpenAI
+    normalized_provider = normalize_ai_provider(provider)
 
     instructions = textwrap.dedent(
         f"""
@@ -252,28 +283,54 @@ def request_research_assistant_reply(
 
     resolved_model = tool_enabled_model(
         model,
+        provider=normalized_provider,
         allow_web_research=allow_web_research,
         allow_file_search=bool(knowledge_vector_store_id),
     )
+    response = None
     try:
-        response = OpenAI(api_key=api_key).responses.create(
-            model=resolved_model,
-            instructions=instructions,
-            input=request_text,
-            store=False,
-            **converter_response_options(
+        client = make_ai_client(api_key=api_key, provider=normalized_provider)
+        if normalized_provider == PROVIDER_OPENROUTER:
+            request_kwargs: dict[str, object] = {
+                "model": resolved_model,
+                "messages": [
+                    {"role": "system", "content": instructions},
+                    {
+                        "role": "user",
+                        "content": uploaded_files_to_chat_content(
+                            request_text,
+                            uploaded_files=supporting_files,
+                        ),
+                    },
+                ],
+            }
+            plugins = openrouter_chat_plugins(
                 allow_web_research=allow_web_research,
-                knowledge_vector_store_id=knowledge_vector_store_id,
-            ),
-        )
-        reply_text = extract_openai_output_text(response)
+                include_file_parser=has_pdf_files(supporting_files),
+            )
+            if plugins:
+                request_kwargs["extra_body"] = {"plugins": plugins}
+            response = client.chat.completions.create(**request_kwargs)
+            reply_text = extract_chat_completion_text(response)
+        else:
+            response = client.responses.create(
+                model=resolved_model,
+                instructions=instructions,
+                input=request_text,
+                store=False,
+                **converter_response_options(
+                    allow_web_research=allow_web_research,
+                    knowledge_vector_store_id=knowledge_vector_store_id,
+                ),
+            )
+            reply_text = extract_openai_output_text(response)
         if not reply_text:
-            raise ValueError("OpenAI returned an empty research reply.")
+            raise ValueError(f"{provider_label(normalized_provider)} returned an empty research reply.")
     except Exception as exc:
         log_usage_event(
             feature_name="research_assistant",
             model=resolved_model,
-            has_files=bool(knowledge_vector_store_id),
+            has_files=bool(knowledge_vector_store_id or supporting_files),
             has_images=False,
             status="failed",
             error_summary=str(exc),
@@ -283,11 +340,11 @@ def request_research_assistant_reply(
     log_usage_event(
         feature_name="research_assistant",
         model=resolved_model,
-        has_files=bool(knowledge_vector_store_id),
+        has_files=bool(knowledge_vector_store_id or supporting_files),
         has_images=False,
         status="success",
     )
-    return reply_text, extract_response_sources(response)
+    return reply_text, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
 
 
 def request_spreadsheet_analysis_with_openai(
@@ -296,9 +353,12 @@ def request_spreadsheet_analysis_with_openai(
     model: str,
     uploaded_files: list[object],
     question: str,
+    provider: str | None = PROVIDER_OPENAI,
 ) -> tuple[str, list[dict[str, str]]]:
     """Analyze uploaded datasets using Code Interpreter."""
-    from openai import OpenAI
+    normalized_provider = normalize_ai_provider(provider)
+    if normalized_provider == PROVIDER_OPENROUTER:
+        raise ValueError(OPENAI_ONLY_RESPONSES_FEATURE_MESSAGE)
 
     if not uploaded_files:
         raise ValueError("Upload at least one spreadsheet or dataset before running analysis.")
@@ -318,9 +378,9 @@ def request_spreadsheet_analysis_with_openai(
         If it helps the answer, generate plots or export files in the container and mention them.
         """
     ).strip()
-    resolved_model = tool_enabled_model(model, allow_code_interpreter=True)
+    resolved_model = tool_enabled_model(model, provider=normalized_provider, allow_code_interpreter=True)
     try:
-        response = OpenAI(api_key=api_key).responses.create(
+        response = make_ai_client(api_key=api_key, provider=normalized_provider).responses.create(
             model=resolved_model,
             tools=[
                 {

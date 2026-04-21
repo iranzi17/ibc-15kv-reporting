@@ -9,13 +9,20 @@ from pathlib import Path
 from config import BASE_DIR
 from core.session_state import utc_timestamp
 
-USAGE_LOG_FILE = Path(os.environ.get("OPENAI_USAGE_LOG_FILE", str(BASE_DIR / "openai_usage_log.jsonl")))
+USAGE_LOG_FILE = Path(
+    os.environ.get(
+        "AI_USAGE_LOG_FILE",
+        os.environ.get("OPENAI_USAGE_LOG_FILE", str(BASE_DIR / "ai_usage_log.jsonl")),
+    )
+)
 MAX_ERROR_SUMMARY_LENGTH = 180
 _SAFE_MODEL_LOG_VALUES = {
     "gpt-4o-mini": "gpt-4o-mini",
     "gpt-4o-transcribe": "gpt-4o-transcribe",
     "gpt-4o-mini-tts": "gpt-4o-mini-tts",
     "gpt-5.4-mini": "gpt-5.4-mini",
+    "openai/gpt-4o-mini": "openai/gpt-4o-mini",
+    "openai/gpt-audio-mini": "openai/gpt-audio-mini",
 }
 _SAFE_FEATURE_LOG_VALUES = {
     "contractor_conversion",
@@ -88,7 +95,7 @@ def log_usage_event(
     status: str,
     error_summary: str = "",
 ) -> None:
-    """Append one OpenAI usage event to the local JSONL log."""
+    """Append one AI usage event to the local JSONL log."""
     try:
         _ = sanitize_error_summary(error_summary)
         event = {

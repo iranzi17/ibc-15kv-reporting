@@ -13,9 +13,15 @@ from PIL import Image
 from core.session_state import AI_IMAGE_CAPTIONS_KEY, utc_timestamp
 from report_structuring import REPORT_HEADERS
 from services.openai_client import (
+    PROVIDER_OPENAI,
+    PROVIDER_OPENROUTER,
     TRANSCRIPTION_OPENAI_MODEL,
+    TRANSCRIPTION_OPENROUTER_MODEL,
     TTS_OPENAI_MODEL,
+    extract_chat_completion_text,
     extract_openai_output_text,
+    make_ai_client,
+    normalize_ai_provider,
 )
 from services.usage_logging import log_usage_event
 
@@ -114,6 +120,56 @@ def uploaded_files_to_response_input(
     return [{"role": "user", "content": content}]
 
 
+def uploaded_file_to_chat_part(uploaded_file: object) -> dict[str, object] | None:
+    """Convert one uploaded file into an OpenRouter/OpenAI Chat content part."""
+    data = uploaded_file_bytes(uploaded_file)
+    if not data:
+        return None
+
+    filename = uploaded_file_name(uploaded_file)
+    mime_type = uploaded_file_mime_type(uploaded_file)
+    data_url = data_url_for_bytes(data, mime_type=mime_type)
+    if mime_type.startswith("image/"):
+        return {"type": "image_url", "image_url": {"url": data_url}}
+    if mime_type == "application/pdf" or filename.lower().endswith(".pdf"):
+        return {"type": "file", "file": {"filename": filename, "file_data": data_url}}
+    if mime_type.startswith("text/") or filename.lower().endswith((".txt", ".md", ".csv", ".json", ".xml")):
+        decoded = data.decode("utf-8", errors="replace").strip()
+        if decoded:
+            return {
+                "type": "text",
+                "text": f"Attached text file ({filename}):\n{decoded[:12000]}",
+            }
+    return {
+        "type": "text",
+        "text": f"Attached file available by name only: {filename} ({mime_type}).",
+    }
+
+
+def uploaded_files_to_chat_content(
+    prompt_text: str,
+    *,
+    uploaded_files: list[object] | None = None,
+) -> list[dict[str, object]]:
+    """Convert prompt and attachments into Chat Completions multipart content."""
+    content: list[dict[str, object]] = [{"type": "text", "text": prompt_text.strip()}]
+    for uploaded_file in uploaded_files or []:
+        part = uploaded_file_to_chat_part(uploaded_file)
+        if part:
+            content.append(part)
+    return content
+
+
+def has_pdf_files(files: list[object] | None) -> bool:
+    """Return whether uploaded files contain at least one PDF."""
+    for uploaded_file in files or []:
+        filename = uploaded_file_name(uploaded_file).lower()
+        mime_type = uploaded_file_mime_type(uploaded_file)
+        if mime_type == "application/pdf" or filename.endswith(".pdf"):
+            return True
+    return False
+
+
 def has_image_files(files: list[object] | None) -> bool:
     return any(uploaded_file_mime_type(uploaded_file).startswith("image/") for uploaded_file in files or [])
 
@@ -194,12 +250,13 @@ def request_image_captions_with_openai(
     discipline: str,
     report_row: list[str] | tuple[str, ...],
     persistent_guidance: str = "",
+    provider: str | None = PROVIDER_OPENAI,
 ) -> list[str]:
-    """Generate short site-photo captions using OpenAI vision."""
-    from openai import OpenAI
+    """Generate short site-photo captions using the configured AI vision provider."""
 
     if not images:
         return []
+    normalized_provider = normalize_ai_provider(provider)
 
     instructions = textwrap.dedent(
         f"""
@@ -217,49 +274,78 @@ def request_image_captions_with_openai(
     if persistent_guidance:
         instructions = f"{instructions}\n\nSaved caption and reporting preferences:\n{persistent_guidance}"
 
-    content: list[dict[str, str]] = [
-        {
-            "type": "input_text",
-            "text": (
-                "Report context:\n"
-                f"{report_row_context_text(report_row)}\n\n"
-                "Generate captions for the attached site photos."
-            ),
-        }
-    ]
-    for image_bytes in images:
-        content.append(
-            {
-                "type": "input_image",
-                "image_url": data_url_for_bytes(
-                    bytes(image_bytes or b""),
-                    mime_type=image_mime_type_from_bytes(bytes(image_bytes or b"")),
-                ),
-            }
-        )
+    prompt_text = (
+        "Report context:\n"
+        f"{report_row_context_text(report_row)}\n\n"
+        "Generate captions for the attached site photos."
+    )
 
     try:
-        response = OpenAI(api_key=api_key).responses.create(
-            model=model,
-            instructions=instructions,
-            input=[{"role": "user", "content": content}],
-            text={
-                "format": {
+        if normalized_provider == PROVIDER_OPENROUTER:
+            content: list[dict[str, object]] = [{"type": "text", "text": prompt_text}]
+            for image_bytes in images:
+                payload = bytes(image_bytes or b"")
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": data_url_for_bytes(
+                                payload,
+                                mime_type=image_mime_type_from_bytes(payload),
+                            )
+                        },
+                    }
+                )
+            response = make_ai_client(api_key=api_key, provider=normalized_provider).chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": content},
+                ],
+                response_format={
                     "type": "json_schema",
-                    "name": "site_photo_captions",
-                    "strict": True,
-                    "schema": photo_caption_response_schema(len(images)),
+                    "json_schema": {
+                        "name": "site_photo_captions",
+                        "strict": True,
+                        "schema": photo_caption_response_schema(len(images)),
+                    },
                 }
-            },
-            store=False,
-        )
-        payload_text = extract_openai_output_text(response)
+            )
+            payload_text = extract_chat_completion_text(response)
+        else:
+            content: list[dict[str, str]] = [{"type": "input_text", "text": prompt_text}]
+            for image_bytes in images:
+                payload = bytes(image_bytes or b"")
+                content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": data_url_for_bytes(
+                            payload,
+                            mime_type=image_mime_type_from_bytes(payload),
+                        ),
+                    }
+                )
+            response = make_ai_client(api_key=api_key, provider=normalized_provider).responses.create(
+                model=model,
+                instructions=instructions,
+                input=[{"role": "user", "content": content}],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "site_photo_captions",
+                        "strict": True,
+                        "schema": photo_caption_response_schema(len(images)),
+                    }
+                },
+                store=False,
+            )
+            payload_text = extract_openai_output_text(response)
         if not payload_text:
-            raise ValueError("OpenAI returned empty photo captions.")
+            raise ValueError(f"{'OpenRouter' if normalized_provider == PROVIDER_OPENROUTER else 'OpenAI'} returned empty photo captions.")
         payload = json.loads(payload_text)
         captions = payload.get("captions", [])
         if not isinstance(captions, list):
-            raise ValueError("OpenAI returned invalid photo captions.")
+            raise ValueError("The AI provider returned invalid photo captions.")
     except Exception as exc:
         log_usage_event(
             feature_name="image_captioning",
@@ -286,12 +372,14 @@ def request_transcription_with_openai(
     *,
     api_key: str,
     discipline: str,
+    provider: str | None = PROVIDER_OPENAI,
 ) -> str:
     """Transcribe one or more uploaded voice notes into plain text."""
-    from openai import OpenAI
 
     if not audio_files:
         raise ValueError("Upload at least one voice note before requesting transcription.")
+    normalized_provider = normalize_ai_provider(provider)
+    model = TRANSCRIPTION_OPENROUTER_MODEL if normalized_provider == PROVIDER_OPENROUTER else TRANSCRIPTION_OPENAI_MODEL
 
     prompt = (
         f"This is a {discipline.lower()} construction site voice note for a daily report in Rwanda. "
@@ -300,32 +388,56 @@ def request_transcription_with_openai(
     )
     transcripts: list[str] = []
     try:
-        client = OpenAI(api_key=api_key)
+        client = make_ai_client(api_key=api_key, provider=normalized_provider)
         for uploaded_file in audio_files:
             file_data = uploaded_file_bytes(uploaded_file)
             if not file_data:
                 continue
-            audio_stream = io.BytesIO(file_data)
-            audio_stream.name = uploaded_file_name(uploaded_file)
-            try:
-                transcription = client.audio.transcriptions.create(
-                    model=TRANSCRIPTION_OPENAI_MODEL,
-                    file=audio_stream,
-                    response_format="text",
-                    prompt=prompt,
+            if normalized_provider == PROVIDER_OPENROUTER:
+                filename = uploaded_file_name(uploaded_file)
+                audio_format = filename.rsplit(".", 1)[-1].lower() if "." in filename else "wav"
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Transcribe this voice note as accurately as possible."},
+                                {
+                                    "type": "input_audio",
+                                    "input_audio": {
+                                        "data": base64.b64encode(file_data).decode("utf-8"),
+                                        "format": audio_format,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
                 )
-            finally:
-                audio_stream.close()
+                transcript_text = extract_chat_completion_text(response)
+            else:
+                audio_stream = io.BytesIO(file_data)
+                audio_stream.name = uploaded_file_name(uploaded_file)
+                try:
+                    transcription = client.audio.transcriptions.create(
+                        model=model,
+                        file=audio_stream,
+                        response_format="text",
+                        prompt=prompt,
+                    )
+                finally:
+                    audio_stream.close()
 
-            transcript_text = transcription.strip() if isinstance(transcription, str) else str(getattr(transcription, "text", "") or "").strip()
+                transcript_text = transcription.strip() if isinstance(transcription, str) else str(getattr(transcription, "text", "") or "").strip()
             if transcript_text:
                 transcripts.append(f"Voice note ({uploaded_file_name(uploaded_file)}):\n{transcript_text}")
         if not transcripts:
-            raise ValueError("OpenAI did not return any transcription text.")
+            raise ValueError("The AI provider did not return any transcription text.")
     except Exception as exc:
         log_usage_event(
             feature_name="transcription",
-            model=TRANSCRIPTION_OPENAI_MODEL,
+            model=model,
             has_files=True,
             has_images=False,
             status="failed",
@@ -335,7 +447,7 @@ def request_transcription_with_openai(
 
     log_usage_event(
         feature_name="transcription",
-        model=TRANSCRIPTION_OPENAI_MODEL,
+        model=model,
         has_files=True,
         has_images=False,
         status="success",
@@ -349,15 +461,18 @@ def request_text_to_speech_with_openai(
     api_key: str,
     voice: str = "coral",
     instructions: str = "Speak in a calm, professional consultant briefing tone.",
+    provider: str | None = PROVIDER_OPENAI,
 ) -> bytes:
     """Convert assistant text into MP3 audio."""
-    from openai import OpenAI
+    normalized_provider = normalize_ai_provider(provider)
+    if normalized_provider == PROVIDER_OPENROUTER:
+        raise ValueError("Text-to-speech is not enabled for OpenRouter mode in this app yet. Switch provider to OpenAI for readback audio.")
 
     speech_input = str(text or "").strip()
     if not speech_input:
         raise ValueError("Text is required before generating speech.")
     try:
-        response = OpenAI(api_key=api_key).audio.speech.create(
+        response = make_ai_client(api_key=api_key, provider=normalized_provider).audio.speech.create(
             model=TTS_OPENAI_MODEL,
             voice=voice,
             input=speech_input[:4000],
@@ -405,6 +520,7 @@ def generate_ai_photo_captions_for_reports(
     model: str,
     discipline: str,
     persistent_guidance: str = "",
+    provider: str | None = PROVIDER_OPENAI,
 ) -> dict[tuple[str, str], list[str]]:
     """Generate or reuse AI captions for uploaded report photos."""
     cache = photo_caption_cache()
@@ -432,6 +548,7 @@ def generate_ai_photo_captions_for_reports(
             discipline=discipline,
             report_row=row_mapping[normalized_key],
             persistent_guidance=persistent_guidance,
+            provider=provider,
         )
         cache[cache_key] = {
             "signature": signature,

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import os
-
 import streamlit as st
 
 from core.session_state import (
+    AI_PROVIDER_SESSION_KEY,
     GUIDANCE_TARGETS,
     OPENAI_API_KEY_SESSION_KEY,
     OPENAI_CHAT_MESSAGES_KEY,
     OPENAI_MODEL_SESSION_KEY,
+    OPENROUTER_API_KEY_SESSION_KEY,
+    OPENROUTER_MODEL_SESSION_KEY,
     PROJECT_KNOWLEDGE_FILE_TYPES,
     PROJECT_KNOWLEDGE_VECTOR_STORE_KEY,
     RESEARCH_ASSISTANT_AUDIO_KEY,
@@ -24,11 +25,18 @@ from services.converter_service import conversation_transcript
 from services.media_service import request_text_to_speech_with_openai, uploaded_file_names
 from services.openai_client import (
     DEFAULT_OPENAI_MODEL,
-    default_openai_model,
-    load_openai_api_key,
+    DEFAULT_OPENROUTER_MODEL,
+    PROVIDER_OPENAI,
+    PROVIDER_OPENROUTER,
+    SUPPORTED_AI_PROVIDERS,
+    active_ai_provider,
+    ai_api_key_source,
+    default_ai_model,
+    load_ai_api_key,
     openai_sdk_ready,
+    provider_label,
+    provider_supports_openai_responses_tools,
     request_openai_reply,
-    streamlit_secret,
 )
 from services.research_service import ensure_knowledge_vector_store, request_research_assistant_reply, request_spreadsheet_analysis_with_openai
 from streamlit_ui.helpers import (
@@ -50,7 +58,63 @@ from streamlit_ui.layout import render_section_header, render_subsection
 
 
 def render_project_knowledge_base_panel() -> list[object]:
-    """Render the shared knowledge-base uploader used by AI workflows."""
+    """Render the shared AI provider controls and knowledge-base uploader."""
+    with safe_expander("AI Provider & Model", expanded=True):
+        active_provider = active_ai_provider()
+        provider_options = list(SUPPORTED_AI_PROVIDERS)
+        selected_provider = st.selectbox(
+            "AI provider",
+            provider_options,
+            index=provider_options.index(active_provider) if active_provider in provider_options else 0,
+            format_func=provider_label,
+            key="ai_provider_selector",
+            help="OpenRouter is the default provider for conversion, refinement, captions, research, and diagnostics.",
+        )
+        st.session_state[AI_PROVIDER_SESSION_KEY] = selected_provider
+
+        key_session_name = (
+            OPENROUTER_API_KEY_SESSION_KEY
+            if selected_provider == PROVIDER_OPENROUTER
+            else OPENAI_API_KEY_SESSION_KEY
+        )
+        model_session_name = (
+            OPENROUTER_MODEL_SESSION_KEY
+            if selected_provider == PROVIDER_OPENROUTER
+            else OPENAI_MODEL_SESSION_KEY
+        )
+        default_model = default_ai_model(selected_provider)
+        entered_key = safe_text_input(
+            f"{provider_label(selected_provider)} API key (session only)",
+            value="",
+            type="password",
+            key=f"{selected_provider}_api_key_input",
+            placeholder="sk-or-..." if selected_provider == PROVIDER_OPENROUTER else "sk-...",
+        ).strip()
+        if entered_key:
+            st.session_state[key_session_name] = entered_key
+
+        model_value = safe_text_input(
+            f"{provider_label(selected_provider)} model",
+            value=default_model,
+            key=f"{selected_provider}_model_input",
+            placeholder=DEFAULT_OPENROUTER_MODEL if selected_provider == PROVIDER_OPENROUTER else DEFAULT_OPENAI_MODEL,
+        ).strip()
+        st.session_state[model_session_name] = model_value or default_model
+
+        active_key = load_ai_api_key(selected_provider)
+        if active_key:
+            st.success(f"{provider_label(selected_provider)} key loaded from {ai_api_key_source(selected_provider)}.")
+        else:
+            secret_name = "OPENROUTER_API_KEY" if selected_provider == PROVIDER_OPENROUTER else "OPENAI_API_KEY"
+            st.info(f"Add {secret_name} to Streamlit secrets or the environment, or paste it above for this session.")
+
+        if selected_provider == PROVIDER_OPENROUTER:
+            safe_caption(
+                "OpenRouter mode uses Chat Completions for text, JSON, images, PDFs, web plugin calls, and audio-input transcription on compatible models."
+            )
+        else:
+            safe_caption("OpenAI mode remains available for Responses tools such as vector-store search and Code Interpreter.")
+
     with safe_expander("Shared Project References", expanded=False):
         safe_caption(
             "Upload standards, approved reports, procedures, or client instructions. "
@@ -67,6 +131,11 @@ def render_project_knowledge_base_panel() -> list[object]:
         )
         if uploaded_files:
             safe_caption(f"Knowledge files ready: {', '.join(uploaded_file_names(uploaded_files))}")
+            if not provider_supports_openai_responses_tools(active_ai_provider()):
+                safe_caption(
+                    "In OpenRouter mode, PDFs/images/text files are sent directly to the active request when supported; "
+                    "OpenAI vector-store search is skipped."
+                )
         else:
             st.session_state.pop(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY, None)
         return uploaded_files
@@ -128,56 +197,36 @@ def render_ai_memory_panel(*, record_runtime_issue) -> None:
 def render_general_chat_panel(*, record_runtime_issue) -> None:
     render_subsection(
         "General AI Assistant",
-        "Secondary helper for general reporting questions. It does not connect to personal ChatGPT history.",
+        "Secondary helper for general reporting questions. It does not connect to any personal chat history.",
     )
     with safe_expander("Assistant settings", expanded=False):
-        entered_key = safe_text_input(
-            "OpenAI API key (session only)",
-            value="",
-            type="password",
-            key="openai_api_key_input",
-            placeholder="sk-...",
-        ).strip()
-        if entered_key:
-            st.session_state[OPENAI_API_KEY_SESSION_KEY] = entered_key
-
-        active_key = load_openai_api_key()
-        key_source = "session input"
-        if not st.session_state.get(OPENAI_API_KEY_SESSION_KEY):
-            if os.environ.get("OPENAI_API_KEY", "").strip():
-                key_source = "environment variable"
-            elif streamlit_secret("OPENAI_API_KEY"):
-                key_source = "Streamlit secrets"
-            else:
-                key_source = "not configured"
-
-        model_value = safe_text_input(
-            "OpenAI model",
-            value=default_openai_model(),
-            key="openai_model_input",
-            placeholder=DEFAULT_OPENAI_MODEL,
-        ).strip()
-        st.session_state[OPENAI_MODEL_SESSION_KEY] = model_value or DEFAULT_OPENAI_MODEL
+        active_provider = active_ai_provider()
+        safe_caption(f"Active provider: {provider_label(active_provider)} | Model: {default_ai_model(active_provider)}")
 
         clear_key_col, clear_chat_col = safe_columns(2, gap="large")
         with clear_key_col:
-            if st.button("Forget session API key"):
-                st.session_state.pop(OPENAI_API_KEY_SESSION_KEY, None)
-                st.session_state["openai_api_key_input"] = ""
+            if st.button("Forget active provider session key"):
+                if active_provider == PROVIDER_OPENROUTER:
+                    st.session_state.pop(OPENROUTER_API_KEY_SESSION_KEY, None)
+                    st.session_state[f"{PROVIDER_OPENROUTER}_api_key_input"] = ""
+                else:
+                    st.session_state.pop(OPENAI_API_KEY_SESSION_KEY, None)
+                    st.session_state[f"{PROVIDER_OPENAI}_api_key_input"] = ""
         with clear_chat_col:
             if st.button("Clear assistant history"):
                 st.session_state[OPENAI_CHAT_MESSAGES_KEY] = []
                 st.session_state.pop("openai_previous_response_id", None)
 
+        active_key = load_ai_api_key(active_provider)
         if active_key:
-            st.success(f"OpenAI key loaded from {key_source}.")
+            st.success(f"{provider_label(active_provider)} key loaded from {ai_api_key_source(active_provider)}.")
         else:
-            st.info("Add OPENAI_API_KEY to Streamlit secrets or the environment, or paste it above for this session.")
+            st.info("Configure the active provider key in the AI Provider & Model panel above.")
 
     sdk_ready, sdk_error = openai_sdk_ready()
     if not sdk_ready:
         st.warning(
-            "OpenAI SDK is not installed yet. Run `pip install -r requirements.txt` and reload the app. "
+            "OpenAI-compatible SDK is not installed yet. Run `pip install -r requirements.txt` and reload the app. "
             f"Detail: {sdk_error}"
         )
         return
@@ -185,18 +234,24 @@ def render_general_chat_panel(*, record_runtime_issue) -> None:
     messages = st.session_state.setdefault(OPENAI_CHAT_MESSAGES_KEY, [])
     prompt = safe_chat_input("Ask a general reporting question.")
     if prompt:
-        api_key = load_openai_api_key()
+        active_provider = active_ai_provider()
+        api_key = load_ai_api_key(active_provider)
         if not api_key:
-            st.warning("OpenAI API key is required before you can start chatting.")
+            st.warning(f"{provider_label(active_provider)} API key is required before you can start chatting.")
         else:
-            model = default_openai_model()
+            model = default_ai_model(active_provider)
             messages.append({"role": "user", "content": prompt})
             try:
-                with safe_spinner("Waiting for OpenAI..."):
-                    reply_text, response_id = request_openai_reply(prompt, api_key=api_key, model=model)
+                with safe_spinner(f"Waiting for {provider_label(active_provider)}..."):
+                    reply_text, response_id = request_openai_reply(
+                        prompt,
+                        api_key=api_key,
+                        model=model,
+                        provider=active_provider,
+                    )
             except Exception as exc:
                 messages.pop()
-                st.error(f"OpenAI request failed: {exc}")
+                st.error(f"{provider_label(active_provider)} request failed: {exc}")
                 record_runtime_issue("general_chat", "General assistant request failed.", details=str(exc))
             else:
                 messages.append({"role": "assistant", "content": reply_text})
@@ -280,22 +335,28 @@ def render_advanced_ai_workspace(
             try:
                 if not research_question:
                     raise ValueError("Enter a research question before sending it to the assistant.")
-                api_key = load_openai_api_key()
+                active_provider = active_ai_provider()
+                api_key = load_ai_api_key(active_provider)
                 if not api_key:
-                    raise ValueError("OpenAI API key is required for the research assistant.")
+                    raise ValueError(f"{provider_label(active_provider)} API key is required for the research assistant.")
                 sdk_ready, sdk_error = openai_sdk_ready()
                 if not sdk_ready:
-                    raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                    raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
 
                 knowledge_vector_store_id = ""
-                if knowledge_files:
+                research_supporting_files = knowledge_files if active_provider == PROVIDER_OPENROUTER else None
+                if knowledge_files and provider_supports_openai_responses_tools(active_provider):
                     with safe_spinner("Indexing project references..."):
-                        knowledge_vector_store_id, _ = ensure_knowledge_vector_store(knowledge_files, api_key=api_key)
+                        knowledge_vector_store_id, _ = ensure_knowledge_vector_store(
+                            knowledge_files,
+                            api_key=api_key,
+                            provider=active_provider,
+                        )
 
-                with safe_spinner("Research assistant is working..."):
+                with safe_spinner(f"{provider_label(active_provider)} research assistant is working..."):
                     assistant_message, sources = request_research_assistant_reply(
                         api_key=api_key,
-                        model=default_openai_model(),
+                        model=default_ai_model(active_provider),
                         discipline=discipline,
                         question=research_question,
                         conversation=research_messages,
@@ -303,6 +364,8 @@ def render_advanced_ai_workspace(
                         knowledge_vector_store_id=knowledge_vector_store_id,
                         persistent_guidance=research_guidance,
                         conversation_transcript=conversation_transcript(research_messages),
+                        supporting_files=research_supporting_files,
+                        provider=active_provider,
                     )
             except Exception as exc:
                 st.warning(f"Research assistant failed: {exc}")
@@ -326,14 +389,19 @@ def render_advanced_ai_workspace(
                 )
                 if not last_assistant_message:
                     raise ValueError("Ask the research assistant a question before generating readback audio.")
-                api_key = load_openai_api_key()
+                active_provider = active_ai_provider()
+                api_key = load_ai_api_key(active_provider)
                 if not api_key:
-                    raise ValueError("OpenAI API key is required for text-to-speech.")
+                    raise ValueError(f"{provider_label(active_provider)} API key is required for text-to-speech.")
                 sdk_ready, sdk_error = openai_sdk_ready()
                 if not sdk_ready:
-                    raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                    raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
                 with safe_spinner("Generating research audio..."):
-                    st.session_state[RESEARCH_ASSISTANT_AUDIO_KEY] = request_text_to_speech_with_openai(last_assistant_message, api_key=api_key)
+                    st.session_state[RESEARCH_ASSISTANT_AUDIO_KEY] = request_text_to_speech_with_openai(
+                        last_assistant_message,
+                        api_key=api_key,
+                        provider=active_provider,
+                    )
             except Exception as exc:
                 st.warning(f"Audio generation failed: {exc}")
                 record_runtime_issue("research", "Research audio generation failed.", details=str(exc))
@@ -384,12 +452,15 @@ def render_advanced_ai_workspace(
             try:
                 if not analysis_files:
                     raise ValueError("Upload one or more spreadsheets or datasets before running analysis.")
-                api_key = load_openai_api_key()
+                active_provider = active_ai_provider()
+                if active_provider != PROVIDER_OPENAI:
+                    raise ValueError("Spreadsheet Analyst currently requires OpenAI Responses Code Interpreter. Switch provider to OpenAI for this advanced tool.")
+                api_key = load_ai_api_key(active_provider)
                 if not api_key:
                     raise ValueError("OpenAI API key is required for spreadsheet analysis.")
                 sdk_ready, sdk_error = openai_sdk_ready()
                 if not sdk_ready:
-                    raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                    raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
                 question = analysis_question or (
                     "Use the python tool to summarize the uploaded datasets, highlight anomalies, "
                     "flag missing values, and surface the most actionable reporting insights."
@@ -397,9 +468,10 @@ def render_advanced_ai_workspace(
                 with safe_spinner("Analyzing spreadsheets..."):
                     analysis_text, artifacts = request_spreadsheet_analysis_with_openai(
                         api_key=api_key,
-                        model=default_openai_model(),
+                        model=default_ai_model(active_provider),
                         uploaded_files=analysis_files,
                         question=question,
+                        provider=active_provider,
                     )
             except Exception as exc:
                 st.warning(f"Spreadsheet analysis failed: {exc}")
@@ -414,14 +486,19 @@ def render_advanced_ai_workspace(
                 analysis_text = str(result.get("text", "") or "").strip()
                 if not analysis_text:
                     raise ValueError("Run a spreadsheet analysis before generating readback audio.")
-                api_key = load_openai_api_key()
+                active_provider = active_ai_provider()
+                api_key = load_ai_api_key(active_provider)
                 if not api_key:
-                    raise ValueError("OpenAI API key is required for text-to-speech.")
+                    raise ValueError(f"{provider_label(active_provider)} API key is required for text-to-speech.")
                 sdk_ready, sdk_error = openai_sdk_ready()
                 if not sdk_ready:
-                    raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                    raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
                 with safe_spinner("Generating spreadsheet analysis audio..."):
-                    st.session_state[SHEET_ANALYST_AUDIO_KEY] = request_text_to_speech_with_openai(analysis_text, api_key=api_key)
+                    st.session_state[SHEET_ANALYST_AUDIO_KEY] = request_text_to_speech_with_openai(
+                        analysis_text,
+                        api_key=api_key,
+                        provider=active_provider,
+                    )
             except Exception as exc:
                 st.warning(f"Audio generation failed: {exc}")
                 record_runtime_issue("spreadsheet_analyst", "Spreadsheet analysis audio generation failed.", details=str(exc))

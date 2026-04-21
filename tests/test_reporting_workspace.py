@@ -155,8 +155,10 @@ def test_render_reporting_workspace_caption_failure_uses_fallback_and_generates_
     _patch_layout(monkeypatch)
     monkeypatch.setattr(reporting_workspace, "safe_spinner", lambda *_args, **_kwargs: _Context())
     monkeypatch.setattr(reporting_workspace, "openai_sdk_ready", lambda: (True, ""))
-    monkeypatch.setattr(reporting_workspace, "load_openai_api_key", lambda: "key")
-    monkeypatch.setattr(reporting_workspace, "default_openai_model", lambda: "gpt-4o-mini")
+    monkeypatch.setattr(reporting_workspace, "active_ai_provider", lambda: "openai")
+    monkeypatch.setattr(reporting_workspace, "provider_label", lambda _provider=None: "OpenAI")
+    monkeypatch.setattr(reporting_workspace, "load_ai_api_key", lambda _provider=None: "key")
+    monkeypatch.setattr(reporting_workspace, "default_ai_model", lambda _provider=None: "gpt-4o-mini")
     monkeypatch.setattr(
         reporting_workspace,
         "generate_ai_photo_captions_for_reports",

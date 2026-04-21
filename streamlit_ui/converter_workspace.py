@@ -27,7 +27,15 @@ from services.converter_service import (
     validate_refinement_request,
     validate_structured_rows_for_sheet,
 )
-from services.openai_client import default_openai_model, load_openai_api_key, openai_sdk_ready
+from services.openai_client import (
+    PROVIDER_OPENROUTER,
+    active_ai_provider,
+    default_ai_model,
+    load_ai_api_key,
+    openai_sdk_ready,
+    provider_label,
+    provider_supports_openai_responses_tools,
+)
 from services.research_service import ensure_knowledge_vector_store
 from sheets import append_rows_to_sheet, get_sheet_data
 from streamlit_ui.helpers import (
@@ -164,6 +172,8 @@ def render_converter_workspace(
         "Source Intake",
         "Paste contractor text and add supporting files, photos, or voice notes before conversion.",
     )
+    active_provider = active_ai_provider()
+    provider_name = provider_label(active_provider)
     converter_guidance = active_guidance_text("converter")
     raw_report_text = safe_text_area("Paste contractor report text", height=220, key="contractor_report_text")
     supporting_files = list(
@@ -189,7 +199,10 @@ def render_converter_workspace(
     if audio_files:
         safe_caption(f"Voice notes ready: {', '.join(file.name for file in audio_files)}")
     if knowledge_files:
-        safe_caption("Project knowledge files are available to improve terminology without replacing source facts.")
+        if provider_supports_openai_responses_tools(active_provider):
+            safe_caption("Project knowledge files are available through OpenAI file search to improve terminology without replacing source facts.")
+        else:
+            safe_caption("Project knowledge files are available as direct OpenRouter attachments when the active model supports them.")
     if converter_guidance:
         safe_caption("Saved converter guidance is active.")
 
@@ -212,7 +225,7 @@ def render_converter_workspace(
     with action_columns[0]:
         transcribe_clicked = st.button("Transcribe voice notes into source text")
     with action_columns[1]:
-        convert_clicked = st.button("Convert with OpenAI")
+        convert_clicked = st.button(f"Convert with {provider_name}")
     with action_columns[2]:
         local_parse_clicked = st.button("Use local parser")
     with action_columns[3]:
@@ -222,16 +235,21 @@ def render_converter_workspace(
         try:
             if not audio_files:
                 raise ValueError("Upload one or more voice notes before requesting transcription.")
-            api_key = load_openai_api_key()
+            api_key = load_ai_api_key(active_provider)
             if not api_key:
-                raise ValueError("OpenAI API key is required for voice transcription.")
+                raise ValueError(f"{provider_name} API key is required for voice transcription.")
             sdk_ready, sdk_error = openai_sdk_ready()
             if not sdk_ready:
-                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
             from services.media_service import request_transcription_with_openai
 
-            with safe_spinner("Transcribing voice notes..."):
-                transcript = request_transcription_with_openai(audio_files, api_key=api_key, discipline=discipline)
+            with safe_spinner(f"Transcribing voice notes with {provider_name}..."):
+                transcript = request_transcription_with_openai(
+                    audio_files,
+                    api_key=api_key,
+                    discipline=discipline,
+                    provider=active_provider,
+                )
         except Exception as exc:
             st.warning(f"Voice transcription failed: {exc}")
             record_runtime_issue("converter", "Voice transcription failed.", details=str(exc))
@@ -247,43 +265,48 @@ def render_converter_workspace(
             validation_errors = validate_conversion_source_inputs(raw_report_text, supporting_files)
             if validation_errors:
                 raise ValueError(" ".join(validation_errors))
-            api_key = load_openai_api_key()
+            api_key = load_ai_api_key(active_provider)
             if not api_key:
-                raise ValueError("OpenAI API key is required for conversion.")
+                raise ValueError(f"{provider_name} API key is required for conversion.")
             sdk_ready, sdk_error = openai_sdk_ready()
             if not sdk_ready:
-                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
 
             knowledge_vector_store_id = ""
-            if knowledge_files:
+            if knowledge_files and provider_supports_openai_responses_tools(active_provider):
                 with safe_spinner("Indexing project knowledge files..."):
-                    knowledge_vector_store_id, _ = ensure_knowledge_vector_store(knowledge_files, api_key=api_key)
+                    knowledge_vector_store_id, _ = ensure_knowledge_vector_store(
+                        knowledge_files,
+                        api_key=api_key,
+                        provider=active_provider,
+                    )
 
             previous_rows = st.session_state.get(PARSED_CONTRACTOR_REPORTS_KEY, [])
-            with safe_spinner("Converting contractor inputs..."):
+            with safe_spinner(f"Converting contractor inputs with {provider_name}..."):
                 parsed_rows, research_sources = request_structured_reports_with_openai(
                     str(raw_report_text or "").strip(),
                     api_key=api_key,
-                    model=default_openai_model(),
+                    model=default_ai_model(active_provider),
                     discipline=discipline,
                     allow_web_research=allow_web_research,
                     strict_source_grounded=strict_mode,
-                    supporting_files=supporting_files,
+                    supporting_files=supporting_files + ((knowledge_files or []) if active_provider == PROVIDER_OPENROUTER else []),
                     knowledge_vector_store_id=knowledge_vector_store_id,
                     persistent_guidance=converter_guidance,
+                    provider=active_provider,
                 )
             parsed_rows = apply_field_locks(previous_rows, parsed_rows, locked_fields=locked_fields)
             change_summary = summarize_row_changes(previous_rows, parsed_rows) if previous_rows else []
         except Exception as exc:
             st.warning(f"Conversion failed: {exc}")
-            record_runtime_issue("converter", "OpenAI conversion failed.", details=str(exc))
+            record_runtime_issue("converter", f"{provider_name} conversion failed.", details=str(exc))
         else:
             st.session_state[CONVERTER_CHANGE_SUMMARY_KEY] = change_summary
-            persist_parsed_rows(parsed_rows, source_label="OpenAI", reset_chat=True)
+            persist_parsed_rows(parsed_rows, source_label=provider_name, reset_chat=True)
             if research_sources:
                 st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["content"] += " External or knowledge-base sources were used where helpful."
                 st.session_state[CONTRACTOR_CHAT_MESSAGES_KEY][0]["sources"] = research_sources
-            st.success(f"OpenAI produced {len(parsed_rows)} structured row(s).")
+            st.success(f"{provider_name} produced {len(parsed_rows)} structured row(s).")
             safe_rerun()
 
     if local_parse_clicked:
@@ -399,12 +422,12 @@ def render_converter_workspace(
             )
             if validation_errors:
                 raise ValueError(" ".join(validation_errors))
-            api_key = load_openai_api_key()
+            api_key = load_ai_api_key(active_provider)
             if not api_key:
-                raise ValueError("OpenAI API key is required for refinement.")
+                raise ValueError(f"{provider_name} API key is required for refinement.")
             sdk_ready, sdk_error = openai_sdk_ready()
             if not sdk_ready:
-                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
 
             refinement_feedback, refinement_files = prepare_refinement_inputs(
                 str(refinement_prompt or "").strip(),
@@ -413,19 +436,26 @@ def render_converter_workspace(
                 refinement_audio_files=voice_refinement_inputs,
                 api_key=api_key,
                 discipline=discipline,
+                provider=active_provider,
             )
+            if active_provider == PROVIDER_OPENROUTER and knowledge_files:
+                refinement_files.extend(knowledge_files)
 
             knowledge_vector_store_id = ""
-            if knowledge_files:
+            if knowledge_files and provider_supports_openai_responses_tools(active_provider):
                 with safe_spinner("Refreshing project knowledge files..."):
-                    knowledge_vector_store_id, _ = ensure_knowledge_vector_store(knowledge_files, api_key=api_key)
+                    knowledge_vector_store_id, _ = ensure_knowledge_vector_store(
+                        knowledge_files,
+                        api_key=api_key,
+                        provider=active_provider,
+                    )
 
             previous_rows = list(edited_rows)
-            with safe_spinner("Applying refinement..."):
+            with safe_spinner(f"Applying refinement with {provider_name}..."):
                 assistant_message, refined_rows, research_sources = request_refined_structured_reports_with_openai(
                     str(raw_report_text or "").strip(),
                     api_key=api_key,
-                    model=default_openai_model(),
+                    model=default_ai_model(active_provider),
                     discipline=discipline,
                     current_rows=edited_rows,
                     conversation=refinement_messages,
@@ -435,12 +465,13 @@ def render_converter_workspace(
                     supporting_files=refinement_files,
                     knowledge_vector_store_id=knowledge_vector_store_id,
                     persistent_guidance=converter_guidance,
+                    provider=active_provider,
                 )
             refined_rows = apply_field_locks(previous_rows, refined_rows, locked_fields=locked_fields)
             st.session_state[CONVERTER_CHANGE_SUMMARY_KEY] = summarize_row_changes(previous_rows, refined_rows)
         except Exception as exc:
             st.warning(f"Refinement failed: {exc}")
-            record_runtime_issue("converter", "OpenAI refinement failed.", details=str(exc))
+            record_runtime_issue("converter", f"{provider_name} refinement failed.", details=str(exc))
         else:
             user_message = refinement_request_preview(
                 str(refinement_prompt or "").strip(),
@@ -448,7 +479,7 @@ def render_converter_workspace(
             )
             append_contractor_chat_message("user", user_message)
             append_contractor_chat_message("assistant", assistant_message, sources=research_sources)
-            persist_parsed_rows(refined_rows, source_label="OpenAI", reset_chat=False)
+            persist_parsed_rows(refined_rows, source_label=provider_name, reset_chat=False)
             st.success("Converted rows updated.")
             safe_rerun()
 
