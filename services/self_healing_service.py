@@ -13,6 +13,7 @@ from services.openai_client import (
     normalize_ai_provider,
     provider_label,
 )
+from services.model_routing import plugin_flags_from_plugins
 from services.usage_logging import log_usage_event
 
 
@@ -123,6 +124,10 @@ def request_self_healing_analysis_with_openai(
             has_images=False,
             status="failed",
             error_summary=str(exc),
+            provider=normalized_provider,
+            resolved_model=model,
+            fallback_used=False,
+            plugin_flags=plugin_flags_from_plugins([{"id": "response-healing"}] if normalized_provider == PROVIDER_OPENROUTER else []),
         )
         raise
 
@@ -132,6 +137,10 @@ def request_self_healing_analysis_with_openai(
         has_files=False,
         has_images=False,
         status="success",
+        provider=normalized_provider,
+        resolved_model=model,
+        fallback_used=False,
+        plugin_flags=plugin_flags_from_plugins([{"id": "response-healing"}] if normalized_provider == PROVIDER_OPENROUTER else []),
     )
     return payload
 

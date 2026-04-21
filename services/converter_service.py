@@ -25,6 +25,17 @@ from services.openai_client import (
     normalize_ai_provider,
     provider_label,
 )
+from services.model_routing import (
+    PROFILE_CONVERSION_STRICT,
+    PROFILE_REFINEMENT_STRICT,
+    ResolvedRoutingProfile,
+    chat_completion_options,
+    is_transient_ai_error,
+    model_attempts,
+    openrouter_plugins_for_route,
+    plugin_flags_from_plugins,
+    resolve_routing_profile,
+)
 from services.research_service import converter_response_options, extract_response_sources
 from services.usage_logging import log_usage_event
 
@@ -143,23 +154,6 @@ def contractor_refinement_response_schema() -> dict[str, object]:
         "required": ["assistant_message", "reports"],
         "additionalProperties": False,
     }
-
-
-def openrouter_plugins(
-    *,
-    allow_web_research: bool = False,
-    include_file_parser: bool = False,
-    include_response_healing: bool = False,
-) -> list[dict[str, object]]:
-    """Return OpenRouter plugins for chat-completion workflows."""
-    plugins: list[dict[str, object]] = []
-    if allow_web_research:
-        plugins.append({"id": "web"})
-    if include_file_parser:
-        plugins.append({"id": "file-parser", "pdf": {"engine": "cloudflare-ai"}})
-    if include_response_healing:
-        plugins.append({"id": "response-healing"})
-    return plugins
 
 
 def conversation_transcript(messages: list[dict[str, str]]) -> str:
@@ -322,6 +316,159 @@ def summarize_row_changes(
     return summaries
 
 
+def _converter_plugin_flags(
+    route: ResolvedRoutingProfile,
+    *,
+    supporting_files: list[object] | None,
+    allow_web_research: bool,
+) -> tuple[list[dict[str, object]], dict[str, bool]]:
+    plugins = openrouter_plugins_for_route(
+        route,
+        include_web=allow_web_research,
+        include_file_parser=has_pdf_files(supporting_files),
+        include_response_healing=True,
+    )
+    return plugins, plugin_flags_from_plugins(plugins)
+
+
+def _structured_conversion_attempt(
+    *,
+    api_key: str,
+    provider: str,
+    model: str,
+    route: ResolvedRoutingProfile,
+    instructions: str,
+    request_text: str,
+    supporting_files: list[object] | None,
+    allow_web_research: bool,
+    knowledge_vector_store_id: str,
+) -> tuple[str, object, dict[str, bool]]:
+    client = make_ai_client(api_key=api_key, provider=provider)
+    if provider == PROVIDER_OPENROUTER:
+        plugins, plugin_flags = _converter_plugin_flags(
+            route,
+            supporting_files=supporting_files,
+            allow_web_research=allow_web_research,
+        )
+        request_kwargs: dict[str, object] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {
+                    "role": "user",
+                    "content": uploaded_files_to_chat_content(
+                        request_text,
+                        uploaded_files=supporting_files,
+                    ),
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "consultant_daily_reports",
+                    "strict": True,
+                    "schema": consultant_report_response_schema(),
+                },
+            },
+            **chat_completion_options(route),
+        }
+        if plugins:
+            request_kwargs["extra_body"] = {"plugins": plugins}
+        response = client.chat.completions.create(**request_kwargs)
+        return extract_chat_completion_text(response), response, plugin_flags
+
+    request_input: object = request_text
+    if supporting_files:
+        request_input = uploaded_files_to_response_input(request_text, uploaded_files=supporting_files)
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=request_input,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "consultant_daily_reports",
+                "strict": True,
+                "schema": consultant_report_response_schema(),
+            }
+        },
+        store=False,
+        **converter_response_options(
+            allow_web_research=allow_web_research,
+            knowledge_vector_store_id=knowledge_vector_store_id,
+        ),
+    )
+    return extract_openai_output_text(response), response, plugin_flags_from_plugins([])
+
+
+def _structured_refinement_attempt(
+    *,
+    api_key: str,
+    provider: str,
+    model: str,
+    route: ResolvedRoutingProfile,
+    instructions: str,
+    request_text: str,
+    request_input: object,
+    supporting_files: list[object] | None,
+    allow_web_research: bool,
+    knowledge_vector_store_id: str,
+) -> tuple[str, object, dict[str, bool]]:
+    client = make_ai_client(api_key=api_key, provider=provider)
+    if provider == PROVIDER_OPENROUTER:
+        plugins, plugin_flags = _converter_plugin_flags(
+            route,
+            supporting_files=supporting_files,
+            allow_web_research=allow_web_research,
+        )
+        request_kwargs: dict[str, object] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {
+                    "role": "user",
+                    "content": uploaded_files_to_chat_content(
+                        request_text,
+                        uploaded_files=supporting_files,
+                    ),
+                },
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "consultant_report_refinement",
+                    "strict": True,
+                    "schema": contractor_refinement_response_schema(),
+                },
+            },
+            **chat_completion_options(route),
+        }
+        if plugins:
+            request_kwargs["extra_body"] = {"plugins": plugins}
+        response = client.chat.completions.create(**request_kwargs)
+        return extract_chat_completion_text(response), response, plugin_flags
+
+    response = client.responses.create(
+        model=model,
+        instructions=instructions,
+        input=request_input,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "consultant_report_refinement",
+                "strict": True,
+                "schema": contractor_refinement_response_schema(),
+            }
+        },
+        store=False,
+        **converter_response_options(
+            allow_web_research=allow_web_research,
+            knowledge_vector_store_id=knowledge_vector_store_id,
+        ),
+    )
+    return extract_openai_output_text(response), response, plugin_flags_from_plugins([])
+
+
 def request_structured_reports_with_openai(
     raw_report_text: str,
     *,
@@ -380,92 +527,79 @@ def request_structured_reports_with_openai(
 
     request_text = "\n\n".join(prompt_sections)
 
-    resolved_model = converter_model(
-        model,
+    route = resolve_routing_profile(
+        PROFILE_CONVERSION_STRICT,
         provider=normalized_provider,
+        primary_model_override=model,
         allow_web_research=allow_web_research,
-        allow_file_search=bool(knowledge_vector_store_id),
+        allow_file_parser=has_pdf_files(supporting_files),
     )
-    response = None
-    try:
-        client = make_ai_client(api_key=api_key, provider=normalized_provider)
-        if normalized_provider == PROVIDER_OPENROUTER:
-            request_kwargs: dict[str, object] = {
-                "model": resolved_model,
-                "messages": [
-                    {"role": "system", "content": instructions},
-                    {
-                        "role": "user",
-                        "content": uploaded_files_to_chat_content(
-                            request_text,
-                            uploaded_files=supporting_files,
-                        ),
-                    },
-                ],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "consultant_daily_reports",
-                        "strict": True,
-                        "schema": consultant_report_response_schema(),
-                    },
-                },
-            }
-            plugins = openrouter_plugins(
-                allow_web_research=allow_web_research,
-                include_file_parser=has_pdf_files(supporting_files),
-                include_response_healing=True,
-            )
-            if plugins:
-                request_kwargs["extra_body"] = {"plugins": plugins}
-            response = client.chat.completions.create(**request_kwargs)
-            payload_text = extract_chat_completion_text(response)
-        else:
-            request_input: object = request_text
-            if supporting_files:
-                request_input = uploaded_files_to_response_input(request_text, uploaded_files=supporting_files)
-            response = client.responses.create(
+    last_exception: Exception | None = None
+    for candidate_model, fallback_used in model_attempts(route):
+        resolved_model = converter_model(
+            candidate_model,
+            provider=normalized_provider,
+            allow_web_research=allow_web_research,
+            allow_file_search=bool(knowledge_vector_store_id),
+        )
+        try:
+            payload_text, response, plugin_flags = _structured_conversion_attempt(
+                api_key=api_key,
+                provider=normalized_provider,
                 model=resolved_model,
+                route=route,
                 instructions=instructions,
-                input=request_input,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "consultant_daily_reports",
-                        "strict": True,
-                        "schema": consultant_report_response_schema(),
-                    }
-                },
-                store=False,
-                **converter_response_options(
-                    allow_web_research=allow_web_research,
-                    knowledge_vector_store_id=knowledge_vector_store_id,
-                ),
+                request_text=request_text,
+                supporting_files=supporting_files,
+                allow_web_research=allow_web_research,
+                knowledge_vector_store_id=knowledge_vector_store_id,
             )
-            payload_text = extract_openai_output_text(response)
-        if not payload_text:
-            raise ValueError(f"{provider_label(normalized_provider)} returned an empty structured output.")
-        payload = json.loads(payload_text)
-        rows = normalize_structured_rows(structured_report_rows(payload))
-    except Exception as exc:
+            if not payload_text:
+                raise ValueError(f"{provider_label(normalized_provider)} returned an empty structured output.")
+            payload = json.loads(payload_text)
+            rows = normalize_structured_rows(structured_report_rows(payload))
+        except Exception as exc:
+            last_exception = exc
+            should_retry = (
+                not fallback_used
+                and route.fallback_model
+                and route.fallback_model != candidate_model
+                and is_transient_ai_error(exc)
+            )
+            log_usage_event(
+                feature_name="contractor_conversion",
+                model=resolved_model,
+                has_files=bool(supporting_files),
+                has_images=has_image_files(supporting_files),
+                status="failed",
+                error_summary=str(exc),
+                provider=normalized_provider,
+                routing_profile=route.name,
+                resolved_model=resolved_model,
+                fallback_used=fallback_used,
+                plugin_flags=plugin_flags_from_plugins([]),
+            )
+            if should_retry:
+                continue
+            raise
+
         log_usage_event(
             feature_name="contractor_conversion",
             model=resolved_model,
             has_files=bool(supporting_files),
             has_images=has_image_files(supporting_files),
-            status="failed",
-            error_summary=str(exc),
+            status="success",
+            provider=normalized_provider,
+            routing_profile=route.name,
+            resolved_model=resolved_model,
+            fallback_used=fallback_used,
+            plugin_flags=plugin_flags,
         )
-        raise
+        return rows, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
 
-    log_usage_event(
-        feature_name="contractor_conversion",
-        model=resolved_model,
-        has_files=bool(supporting_files),
-        has_images=has_image_files(supporting_files),
-        status="success",
-    )
-    return rows, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("No contractor conversion model attempt was available.")
 
 
 def request_refined_structured_reports_with_openai(
@@ -536,88 +670,79 @@ def request_refined_structured_reports_with_openai(
     if supporting_files and normalized_provider == PROVIDER_OPENAI:
         request_input = uploaded_files_to_response_input(request_text, uploaded_files=supporting_files)
 
-    resolved_model = converter_model(
-        model,
+    route = resolve_routing_profile(
+        PROFILE_REFINEMENT_STRICT,
         provider=normalized_provider,
+        primary_model_override=model,
         allow_web_research=allow_web_research,
-        allow_file_search=bool(knowledge_vector_store_id),
+        allow_file_parser=has_pdf_files(supporting_files),
     )
-    response = None
-    try:
-        client = make_ai_client(api_key=api_key, provider=normalized_provider)
-        if normalized_provider == PROVIDER_OPENROUTER:
-            request_kwargs: dict[str, object] = {
-                "model": resolved_model,
-                "messages": [
-                    {"role": "system", "content": instructions},
-                    {
-                        "role": "user",
-                        "content": uploaded_files_to_chat_content(
-                            request_text,
-                            uploaded_files=supporting_files,
-                        ),
-                    },
-                ],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "consultant_report_refinement",
-                        "strict": True,
-                        "schema": contractor_refinement_response_schema(),
-                    },
-                },
-            }
-            plugins = openrouter_plugins(
-                allow_web_research=allow_web_research,
-                include_file_parser=has_pdf_files(supporting_files),
-                include_response_healing=True,
-            )
-            if plugins:
-                request_kwargs["extra_body"] = {"plugins": plugins}
-            response = client.chat.completions.create(**request_kwargs)
-            payload_text = extract_chat_completion_text(response)
-        else:
-            response = client.responses.create(
+    last_exception: Exception | None = None
+    for candidate_model, fallback_used in model_attempts(route):
+        resolved_model = converter_model(
+            candidate_model,
+            provider=normalized_provider,
+            allow_web_research=allow_web_research,
+            allow_file_search=bool(knowledge_vector_store_id),
+        )
+        try:
+            payload_text, response, plugin_flags = _structured_refinement_attempt(
+                api_key=api_key,
+                provider=normalized_provider,
                 model=resolved_model,
+                route=route,
                 instructions=instructions,
-                input=request_input,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "consultant_report_refinement",
-                        "strict": True,
-                        "schema": contractor_refinement_response_schema(),
-                    }
-                },
-                store=False,
-                **converter_response_options(
-                    allow_web_research=allow_web_research,
-                    knowledge_vector_store_id=knowledge_vector_store_id,
-                ),
+                request_text=request_text,
+                request_input=request_input,
+                supporting_files=supporting_files,
+                allow_web_research=allow_web_research,
+                knowledge_vector_store_id=knowledge_vector_store_id,
             )
-            payload_text = extract_openai_output_text(response)
-        if not payload_text:
-            raise ValueError(f"{provider_label(normalized_provider)} returned an empty refinement output.")
-        payload = json.loads(payload_text)
-        assistant_message = str(payload.get("assistant_message", "") or "").strip() or "I updated the converted consultant rows."
-        rows = normalize_structured_rows(structured_report_rows(payload.get("reports", [])))
-    except Exception as exc:
+            if not payload_text:
+                raise ValueError(f"{provider_label(normalized_provider)} returned an empty refinement output.")
+            payload = json.loads(payload_text)
+            assistant_message = str(payload.get("assistant_message", "") or "").strip() or "I updated the converted consultant rows."
+            rows = normalize_structured_rows(structured_report_rows(payload.get("reports", [])))
+        except Exception as exc:
+            last_exception = exc
+            should_retry = (
+                not fallback_used
+                and route.fallback_model
+                and route.fallback_model != candidate_model
+                and is_transient_ai_error(exc)
+            )
+            log_usage_event(
+                feature_name="contractor_refinement",
+                model=resolved_model,
+                has_files=bool(supporting_files),
+                has_images=has_image_files(supporting_files),
+                status="failed",
+                error_summary=str(exc),
+                provider=normalized_provider,
+                routing_profile=route.name,
+                resolved_model=resolved_model,
+                fallback_used=fallback_used,
+                plugin_flags=plugin_flags_from_plugins([]),
+            )
+            if should_retry:
+                continue
+            raise
+
         log_usage_event(
             feature_name="contractor_refinement",
             model=resolved_model,
             has_files=bool(supporting_files),
             has_images=has_image_files(supporting_files),
-            status="failed",
-            error_summary=str(exc),
+            status="success",
+            provider=normalized_provider,
+            routing_profile=route.name,
+            resolved_model=resolved_model,
+            fallback_used=fallback_used,
+            plugin_flags=plugin_flags,
         )
-        raise
+        return assistant_message, rows, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
 
-    log_usage_event(
-        feature_name="contractor_refinement",
-        model=resolved_model,
-        has_files=bool(supporting_files),
-        has_images=has_image_files(supporting_files),
-        status="success",
-    )
-    return assistant_message, rows, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("No contractor refinement model attempt was available.")
 
