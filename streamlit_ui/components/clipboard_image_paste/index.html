@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Segoe UI", Arial, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        background: transparent;
+      }
+
+      .paste-zone {
+        border: 1px dashed #9ca3af;
+        border-radius: 8px;
+        background: #f8fafc;
+        color: #334155;
+        cursor: text;
+        min-height: 82px;
+        padding: 14px 16px;
+        outline: none;
+        transition: border-color 0.15s ease, background-color 0.15s ease;
+      }
+
+      .paste-zone:focus {
+        border-color: #2563eb;
+        background: #eff6ff;
+      }
+
+      .label {
+        display: block;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      .hint,
+      .status {
+        display: block;
+        font-size: 0.78rem;
+        line-height: 1.35;
+      }
+
+      .hint {
+        color: #64748b;
+      }
+
+      .status {
+        color: #166534;
+        margin-top: 8px;
+      }
+
+      .status.error {
+        color: #991b1b;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="paste-zone" class="paste-zone" tabindex="0" role="button" aria-label="Paste clipboard images here">
+      <span id="label" class="label">Paste images from clipboard</span>
+      <span class="hint">Click here, then press Ctrl+V. Screenshots and copied photos will be attached to this site/date group.</span>
+      <span id="status" class="status"></span>
+    </div>
+
+    <script>
+      const COMPONENT_READY = "streamlit:componentReady";
+      const SET_COMPONENT_VALUE = "streamlit:setComponentValue";
+      const SET_FRAME_HEIGHT = "streamlit:setFrameHeight";
+      const RENDER = "streamlit:render";
+
+      const zone = document.getElementById("paste-zone");
+      const label = document.getElementById("label");
+      const statusEl = document.getElementById("status");
+      let maxImages = 8;
+
+      function send(type, payload = {}) {
+        window.parent.postMessage({ isStreamlitMessage: true, type, ...payload }, "*");
+      }
+
+      function setFrameHeight() {
+        send(SET_FRAME_HEIGHT, { height: document.documentElement.scrollHeight });
+      }
+
+      function setStatus(message, isError = false) {
+        statusEl.textContent = message;
+        statusEl.className = isError ? "status error" : "status";
+        setFrameHeight();
+      }
+
+      function readFileAsDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("Unable to read pasted image."));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      async function handlePaste(event) {
+        const items = Array.from(event.clipboardData?.items || []);
+        const imageItems = items.filter((item) => String(item.type || "").startsWith("image/"));
+        if (!imageItems.length) {
+          setStatus("Clipboard does not contain an image.", true);
+          return;
+        }
+
+        event.preventDefault();
+        const files = imageItems
+          .map((item) => item.getAsFile())
+          .filter((file) => file && String(file.type || "").startsWith("image/"))
+          .slice(0, maxImages);
+
+        if (!files.length) {
+          setStatus("No readable image was found on the clipboard.", true);
+          return;
+        }
+
+        try {
+          const images = [];
+          for (const file of files) {
+            images.push({
+              name: file.name || `clipboard-${Date.now()}.png`,
+              mime_type: file.type || "image/png",
+              data_url: await readFileAsDataUrl(file),
+              size: file.size || 0,
+            });
+          }
+          const pasteId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          send(SET_COMPONENT_VALUE, {
+            value: {
+              paste_id: pasteId,
+              images,
+            },
+            dataType: "json",
+          });
+          setStatus(`${images.length} pasted image${images.length === 1 ? "" : "s"} added.`);
+        } catch (error) {
+          setStatus(error?.message || "Unable to process pasted image.", true);
+        }
+      }
+
+      zone.addEventListener("paste", handlePaste);
+      zone.addEventListener("click", () => zone.focus());
+
+      window.addEventListener("message", (event) => {
+        const data = event.data || {};
+        if (data.type !== RENDER) {
+          return;
+        }
+        const args = data.args || {};
+        label.textContent = args.label || "Paste images from clipboard";
+        maxImages = Number(args.max_images || 8);
+        setFrameHeight();
+      });
+
+      send(COMPONENT_READY, { apiVersion: 1 });
+      setFrameHeight();
+    </script>
+  </body>
+</html>
