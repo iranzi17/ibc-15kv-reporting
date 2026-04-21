@@ -22,7 +22,17 @@ _SAFE_MODEL_LOG_VALUES = {
     "gpt-4o-mini-tts": "gpt-4o-mini-tts",
     "gpt-5.4-mini": "gpt-5.4-mini",
     "openai/gpt-4o-mini": "openai/gpt-4o-mini",
+    "openai/gpt-4o": "openai/gpt-4o",
     "openai/gpt-audio-mini": "openai/gpt-audio-mini",
+}
+_SAFE_PROVIDER_LOG_VALUES = {"openrouter", "openai"}
+_SAFE_ROUTING_PROFILE_LOG_VALUES = {
+    "conversion_strict",
+    "refinement_strict",
+    "captioning_vision",
+    "general_chat_economy",
+    "research_tooling",
+    "transcription_audio",
 }
 _SAFE_FEATURE_LOG_VALUES = {
     "contractor_conversion",
@@ -71,7 +81,30 @@ def sanitize_error_summary(error_summary: str) -> str:
 def sanitize_model_for_logging(model: str) -> str:
     """Return a fixed safe label for the configured model."""
     value = str(model or "").strip()
-    return _SAFE_MODEL_LOG_VALUES.get(value, "[CONFIGURED_MODEL]")
+    if value in _SAFE_MODEL_LOG_VALUES:
+        return value
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,95}", value):
+        return value
+    return "[CONFIGURED_MODEL]"
+
+
+def sanitize_provider_for_logging(provider: str) -> str:
+    value = str(provider or "").strip().lower()
+    return value if value in _SAFE_PROVIDER_LOG_VALUES else ""
+
+
+def sanitize_routing_profile_for_logging(routing_profile: str) -> str:
+    value = str(routing_profile or "").strip()
+    return value if value in _SAFE_ROUTING_PROFILE_LOG_VALUES else ""
+
+
+def sanitize_plugin_flags_for_logging(plugin_flags: dict[str, object] | None) -> dict[str, bool]:
+    flags = plugin_flags if isinstance(plugin_flags, dict) else {}
+    return {
+        "web": bool(flags.get("web", False)),
+        "file_parser": bool(flags.get("file_parser", False)),
+        "response_healing": bool(flags.get("response_healing", False)),
+    }
 
 
 def sanitize_feature_name_for_logging(feature_name: str) -> str:
@@ -94,6 +127,11 @@ def log_usage_event(
     has_images: bool,
     status: str,
     error_summary: str = "",
+    provider: str = "",
+    routing_profile: str = "",
+    resolved_model: str = "",
+    fallback_used: bool = False,
+    plugin_flags: dict[str, object] | None = None,
 ) -> None:
     """Append one AI usage event to the local JSONL log."""
     try:
@@ -102,6 +140,11 @@ def log_usage_event(
             "timestamp": utc_timestamp(),
             "feature_name": sanitize_feature_name_for_logging(feature_name),
             "model": sanitize_model_for_logging(model),
+            "provider": sanitize_provider_for_logging(provider),
+            "routing_profile": sanitize_routing_profile_for_logging(routing_profile),
+            "resolved_model": sanitize_model_for_logging(resolved_model or model),
+            "fallback_used": bool(fallback_used),
+            "plugin_flags": sanitize_plugin_flags_for_logging(plugin_flags),
             "has_files": bool(has_files),
             "has_images": bool(has_images),
             # Keep failure tracking high-level; never persist raw or derived error text locally.

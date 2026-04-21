@@ -13,22 +13,28 @@ from core.session_state import (
     OPENROUTER_API_KEY_SESSION_KEY,
     OPENROUTER_MODEL_SESSION_KEY,
 )
+from services.model_routing import (
+    DEFAULT_AI_PROVIDER,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
+    PROFILE_GENERAL_CHAT_ECONOMY,
+    PROFILE_RESEARCH_TOOLING,
+    PROVIDER_OPENAI,
+    PROVIDER_OPENROUTER,
+    RESEARCH_OPENAI_MODEL,
+    SUPPORTED_AI_PROVIDERS,
+    TRANSCRIPTION_OPENAI_MODEL,
+    TRANSCRIPTION_OPENROUTER_MODEL,
+    TTS_OPENAI_MODEL,
+    chat_completion_options,
+    normalize_ai_provider,
+    provider_label,
+    resolve_routing_profile,
+)
 from services.usage_logging import log_usage_event
 
-PROVIDER_OPENROUTER = "openrouter"
-PROVIDER_OPENAI = "openai"
-SUPPORTED_AI_PROVIDERS = (PROVIDER_OPENROUTER, PROVIDER_OPENAI)
-DEFAULT_AI_PROVIDER = PROVIDER_OPENROUTER
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_APP_TITLE = "IBC 15kV Reporting Platform"
-
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
-RESEARCH_OPENAI_MODEL = "gpt-5.4-mini"
-TRANSCRIPTION_OPENAI_MODEL = "gpt-4o-transcribe"
-TTS_OPENAI_MODEL = "gpt-4o-mini-tts"
-DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini"
-RESEARCH_OPENROUTER_MODEL = "openai/gpt-4o-mini"
-TRANSCRIPTION_OPENROUTER_MODEL = "openai/gpt-audio-mini"
 
 OPENAI_ONLY_RESPONSES_FEATURE_MESSAGE = (
     "This feature still uses OpenAI Responses tools. Switch the AI provider to OpenAI for this workflow."
@@ -41,20 +47,6 @@ def streamlit_secret(name: str, default: str = "") -> str:
         return str(st.secrets.get(name, default) or "").strip()
     except Exception:
         return str(default or "").strip()
-
-
-def normalize_ai_provider(provider: str | None) -> str:
-    """Return a supported AI provider id."""
-    value = str(provider or "").strip().lower()
-    if value in SUPPORTED_AI_PROVIDERS:
-        return value
-    return DEFAULT_AI_PROVIDER
-
-
-def provider_label(provider: str | None = None) -> str:
-    """Return a display label for an AI provider."""
-    normalized = normalize_ai_provider(provider or active_ai_provider())
-    return "OpenRouter" if normalized == PROVIDER_OPENROUTER else "OpenAI"
 
 
 def _configured_provider_key(provider: str) -> str:
@@ -261,6 +253,12 @@ def request_openai_reply(
 ) -> tuple[str, str]:
     """Send one general assistant turn and return (reply_text, response_id)."""
     normalized_provider = normalize_ai_provider(provider)
+    route = resolve_routing_profile(
+        PROFILE_GENERAL_CHAT_ECONOMY,
+        provider=normalized_provider,
+        primary_model_override=model,
+    )
+    resolved_model = route.primary_model
     client = make_ai_client(api_key=api_key, provider=normalized_provider)
 
     if normalized_provider == PROVIDER_OPENROUTER:
@@ -281,33 +279,42 @@ def request_openai_reply(
 
         try:
             response = client.chat.completions.create(
-                model=model,
+                model=resolved_model,
                 messages=messages,
+                **chat_completion_options(route),
             )
             reply_text = extract_chat_completion_text(response) or "No text response was returned."
         except Exception as exc:
             log_usage_event(
                 feature_name="general_chat",
-                model=model,
+                model=resolved_model,
                 has_files=False,
                 has_images=False,
                 status="failed",
                 error_summary=str(exc),
+                provider=normalized_provider,
+                routing_profile=route.name,
+                resolved_model=resolved_model,
+                fallback_used=False,
             )
             raise
 
         log_usage_event(
             feature_name="general_chat",
-            model=model,
+            model=resolved_model,
             has_files=False,
             has_images=False,
             status="success",
+            provider=normalized_provider,
+            routing_profile=route.name,
+            resolved_model=resolved_model,
+            fallback_used=False,
         )
         return reply_text, ""
 
     previous_response_id = st.session_state.get(OPENAI_PREVIOUS_RESPONSE_ID_KEY)
     request_kwargs = {
-        "model": model,
+        "model": resolved_model,
         "input": [{"role": "user", "content": prompt}],
     }
     if previous_response_id:
@@ -319,20 +326,28 @@ def request_openai_reply(
     except Exception as exc:
         log_usage_event(
             feature_name="general_chat",
-            model=model,
+            model=resolved_model,
             has_files=False,
             has_images=False,
             status="failed",
             error_summary=str(exc),
+            provider=normalized_provider,
+            routing_profile=route.name,
+            resolved_model=resolved_model,
+            fallback_used=False,
         )
         raise
 
     log_usage_event(
         feature_name="general_chat",
-        model=model,
+        model=resolved_model,
         has_files=False,
         has_images=False,
         status="success",
+        provider=normalized_provider,
+        routing_profile=route.name,
+        resolved_model=resolved_model,
+        fallback_used=False,
     )
     return reply_text, str(getattr(response, "id", "") or "")
 
@@ -347,7 +362,8 @@ def tool_enabled_model(
 ) -> str:
     """Return a tool-capable model when one is required."""
     if normalize_ai_provider(provider) == PROVIDER_OPENROUTER:
-        return model or RESEARCH_OPENROUTER_MODEL
+        route = resolve_routing_profile(PROFILE_RESEARCH_TOOLING, provider=provider)
+        return model or route.primary_model
     if not any((allow_web_research, allow_file_search, allow_code_interpreter)):
         return model
     if str(model or "").startswith("gpt-5"):

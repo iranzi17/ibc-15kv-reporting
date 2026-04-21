@@ -15,13 +15,21 @@ from report_structuring import REPORT_HEADERS
 from services.openai_client import (
     PROVIDER_OPENAI,
     PROVIDER_OPENROUTER,
-    TRANSCRIPTION_OPENAI_MODEL,
-    TRANSCRIPTION_OPENROUTER_MODEL,
     TTS_OPENAI_MODEL,
     extract_chat_completion_text,
     extract_openai_output_text,
     make_ai_client,
     normalize_ai_provider,
+)
+from services.model_routing import (
+    PROFILE_CAPTIONING_VISION,
+    PROFILE_TRANSCRIPTION_AUDIO,
+    chat_completion_options,
+    is_transient_ai_error,
+    model_attempts,
+    openrouter_plugins_for_route,
+    plugin_flags_from_plugins,
+    resolve_routing_profile,
 )
 from services.usage_logging import log_usage_event
 
@@ -257,6 +265,11 @@ def request_image_captions_with_openai(
     if not images:
         return []
     normalized_provider = normalize_ai_provider(provider)
+    route = resolve_routing_profile(
+        PROFILE_CAPTIONING_VISION,
+        provider=normalized_provider,
+        primary_model_override=model,
+    )
 
     instructions = textwrap.dedent(
         f"""
@@ -280,91 +293,122 @@ def request_image_captions_with_openai(
         "Generate captions for the attached site photos."
     )
 
-    try:
-        if normalized_provider == PROVIDER_OPENROUTER:
-            content: list[dict[str, object]] = [{"type": "text", "text": prompt_text}]
-            for image_bytes in images:
-                payload = bytes(image_bytes or b"")
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": data_url_for_bytes(
+    last_exception: Exception | None = None
+    for resolved_model, fallback_used in model_attempts(route):
+        plugins = openrouter_plugins_for_route(route, include_response_healing=True)
+        plugin_flags = plugin_flags_from_plugins(plugins)
+        try:
+            if normalized_provider == PROVIDER_OPENROUTER:
+                content: list[dict[str, object]] = [{"type": "text", "text": prompt_text}]
+                for image_bytes in images:
+                    payload = bytes(image_bytes or b"")
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": data_url_for_bytes(
+                                    payload,
+                                    mime_type=image_mime_type_from_bytes(payload),
+                                )
+                            },
+                        }
+                    )
+                request_kwargs: dict[str, object] = {
+                    "model": resolved_model,
+                    "messages": [
+                        {"role": "system", "content": instructions},
+                        {"role": "user", "content": content},
+                    ],
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "site_photo_captions",
+                            "strict": True,
+                            "schema": photo_caption_response_schema(len(images)),
+                        },
+                    },
+                    **chat_completion_options(route),
+                }
+                if plugins:
+                    request_kwargs["extra_body"] = {"plugins": plugins}
+                response = make_ai_client(api_key=api_key, provider=normalized_provider).chat.completions.create(**request_kwargs)
+                payload_text = extract_chat_completion_text(response)
+            else:
+                content: list[dict[str, str]] = [{"type": "input_text", "text": prompt_text}]
+                for image_bytes in images:
+                    payload = bytes(image_bytes or b"")
+                    content.append(
+                        {
+                            "type": "input_image",
+                            "image_url": data_url_for_bytes(
                                 payload,
                                 mime_type=image_mime_type_from_bytes(payload),
-                            )
-                        },
-                    }
-                )
-            response = make_ai_client(api_key=api_key, provider=normalized_provider).chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": instructions},
-                    {"role": "user", "content": content},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "site_photo_captions",
-                        "strict": True,
-                        "schema": photo_caption_response_schema(len(images)),
+                            ),
+                        }
+                    )
+                response = make_ai_client(api_key=api_key, provider=normalized_provider).responses.create(
+                    model=resolved_model,
+                    instructions=instructions,
+                    input=[{"role": "user", "content": content}],
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": "site_photo_captions",
+                            "strict": True,
+                            "schema": photo_caption_response_schema(len(images)),
+                        }
                     },
-                }
-            )
-            payload_text = extract_chat_completion_text(response)
-        else:
-            content: list[dict[str, str]] = [{"type": "input_text", "text": prompt_text}]
-            for image_bytes in images:
-                payload = bytes(image_bytes or b"")
-                content.append(
-                    {
-                        "type": "input_image",
-                        "image_url": data_url_for_bytes(
-                            payload,
-                            mime_type=image_mime_type_from_bytes(payload),
-                        ),
-                    }
+                    store=False,
                 )
-            response = make_ai_client(api_key=api_key, provider=normalized_provider).responses.create(
-                model=model,
-                instructions=instructions,
-                input=[{"role": "user", "content": content}],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "site_photo_captions",
-                        "strict": True,
-                        "schema": photo_caption_response_schema(len(images)),
-                    }
-                },
-                store=False,
+                payload_text = extract_openai_output_text(response)
+            if not payload_text:
+                raise ValueError(f"{'OpenRouter' if normalized_provider == PROVIDER_OPENROUTER else 'OpenAI'} returned empty photo captions.")
+            payload = json.loads(payload_text)
+            captions = payload.get("captions", [])
+            if not isinstance(captions, list):
+                raise ValueError("The AI provider returned invalid photo captions.")
+        except Exception as exc:
+            last_exception = exc
+            should_retry = (
+                not fallback_used
+                and route.fallback_model
+                and route.fallback_model != resolved_model
+                and is_transient_ai_error(exc)
             )
-            payload_text = extract_openai_output_text(response)
-        if not payload_text:
-            raise ValueError(f"{'OpenRouter' if normalized_provider == PROVIDER_OPENROUTER else 'OpenAI'} returned empty photo captions.")
-        payload = json.loads(payload_text)
-        captions = payload.get("captions", [])
-        if not isinstance(captions, list):
-            raise ValueError("The AI provider returned invalid photo captions.")
-    except Exception as exc:
+            log_usage_event(
+                feature_name="image_captioning",
+                model=resolved_model,
+                has_files=True,
+                has_images=True,
+                status="failed",
+                error_summary=str(exc),
+                provider=normalized_provider,
+                routing_profile=route.name,
+                resolved_model=resolved_model,
+                fallback_used=fallback_used,
+                plugin_flags=plugin_flags,
+            )
+            if should_retry:
+                continue
+            raise
+
         log_usage_event(
             feature_name="image_captioning",
-            model=model,
+            model=resolved_model,
             has_files=True,
             has_images=True,
-            status="failed",
-            error_summary=str(exc),
+            status="success",
+            provider=normalized_provider,
+            routing_profile=route.name,
+            resolved_model=resolved_model,
+            fallback_used=fallback_used,
+            plugin_flags=plugin_flags,
         )
-        raise
+        return [str(caption or "").strip() for caption in captions]
 
-    log_usage_event(
-        feature_name="image_captioning",
-        model=model,
-        has_files=True,
-        has_images=True,
-        status="success",
-    )
-    return [str(caption or "").strip() for caption in captions]
+    if last_exception:
+        raise last_exception
+    raise RuntimeError("No image-captioning model attempt was available.")
 
 
 def request_transcription_with_openai(
@@ -379,7 +423,8 @@ def request_transcription_with_openai(
     if not audio_files:
         raise ValueError("Upload at least one voice note before requesting transcription.")
     normalized_provider = normalize_ai_provider(provider)
-    model = TRANSCRIPTION_OPENROUTER_MODEL if normalized_provider == PROVIDER_OPENROUTER else TRANSCRIPTION_OPENAI_MODEL
+    route = resolve_routing_profile(PROFILE_TRANSCRIPTION_AUDIO, provider=normalized_provider)
+    model = route.primary_model
 
     prompt = (
         f"This is a {discipline.lower()} construction site voice note for a daily report in Rwanda. "
@@ -414,6 +459,7 @@ def request_transcription_with_openai(
                             ],
                         },
                     ],
+                    **chat_completion_options(route),
                 )
                 transcript_text = extract_chat_completion_text(response)
             else:
@@ -442,6 +488,11 @@ def request_transcription_with_openai(
             has_images=False,
             status="failed",
             error_summary=str(exc),
+            provider=normalized_provider,
+            routing_profile=route.name,
+            resolved_model=model,
+            fallback_used=False,
+            plugin_flags=plugin_flags_from_plugins([]),
         )
         raise
 
@@ -451,6 +502,11 @@ def request_transcription_with_openai(
         has_files=True,
         has_images=False,
         status="success",
+        provider=normalized_provider,
+        routing_profile=route.name,
+        resolved_model=model,
+        fallback_used=False,
+        plugin_flags=plugin_flags_from_plugins([]),
     )
     return "\n\n".join(transcripts)
 
@@ -488,6 +544,11 @@ def request_text_to_speech_with_openai(
             has_images=False,
             status="failed",
             error_summary=str(exc),
+            provider=normalized_provider,
+            routing_profile="",
+            resolved_model=TTS_OPENAI_MODEL,
+            fallback_used=False,
+            plugin_flags=plugin_flags_from_plugins([]),
         )
         raise
 
@@ -497,6 +558,11 @@ def request_text_to_speech_with_openai(
         has_files=False,
         has_images=False,
         status="success",
+        provider=normalized_provider,
+        routing_profile="",
+        resolved_model=TTS_OPENAI_MODEL,
+        fallback_used=False,
+        plugin_flags=plugin_flags_from_plugins([]),
     )
     return audio_bytes
 

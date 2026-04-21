@@ -27,6 +27,13 @@ from services.openai_client import (
     provider_supports_openai_responses_tools,
     tool_enabled_model,
 )
+from services.model_routing import (
+    PROFILE_RESEARCH_TOOLING,
+    chat_completion_options,
+    openrouter_plugins_for_route,
+    plugin_flags_from_plugins,
+    resolve_routing_profile,
+)
 from services.usage_logging import log_usage_event
 
 
@@ -151,23 +158,6 @@ def converter_response_options(
     }
 
 
-def openrouter_chat_plugins(
-    *,
-    allow_web_research: bool = False,
-    include_file_parser: bool = False,
-    include_response_healing: bool = False,
-) -> list[dict[str, object]]:
-    """Return OpenRouter plugin configuration for chat-completion requests."""
-    plugins: list[dict[str, object]] = []
-    if allow_web_research:
-        plugins.append({"id": "web"})
-    if include_file_parser:
-        plugins.append({"id": "file-parser", "pdf": {"engine": "cloudflare-ai"}})
-    if include_response_healing:
-        plugins.append({"id": "response-healing"})
-    return plugins
-
-
 def knowledge_vector_store_cache() -> dict[str, object]:
     return st.session_state.setdefault(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY, {})
 
@@ -281,13 +271,21 @@ def request_research_assistant_reply(
         """
     ).strip()
 
+    route = resolve_routing_profile(
+        PROFILE_RESEARCH_TOOLING,
+        provider=normalized_provider,
+        primary_model_override=model,
+        allow_web_research=allow_web_research,
+        allow_file_parser=has_pdf_files(supporting_files),
+    )
     resolved_model = tool_enabled_model(
-        model,
+        route.primary_model,
         provider=normalized_provider,
         allow_web_research=allow_web_research,
         allow_file_search=bool(knowledge_vector_store_id),
     )
     response = None
+    plugin_flags = plugin_flags_from_plugins([])
     try:
         client = make_ai_client(api_key=api_key, provider=normalized_provider)
         if normalized_provider == PROVIDER_OPENROUTER:
@@ -303,11 +301,14 @@ def request_research_assistant_reply(
                         ),
                     },
                 ],
+                **chat_completion_options(route),
             }
-            plugins = openrouter_chat_plugins(
-                allow_web_research=allow_web_research,
+            plugins = openrouter_plugins_for_route(
+                route,
+                include_web=allow_web_research,
                 include_file_parser=has_pdf_files(supporting_files),
             )
+            plugin_flags = plugin_flags_from_plugins(plugins)
             if plugins:
                 request_kwargs["extra_body"] = {"plugins": plugins}
             response = client.chat.completions.create(**request_kwargs)
@@ -334,6 +335,11 @@ def request_research_assistant_reply(
             has_images=False,
             status="failed",
             error_summary=str(exc),
+            provider=normalized_provider,
+            routing_profile=route.name,
+            resolved_model=resolved_model,
+            fallback_used=False,
+            plugin_flags=plugin_flags,
         )
         raise
 
@@ -343,6 +349,11 @@ def request_research_assistant_reply(
         has_files=bool(knowledge_vector_store_id or supporting_files),
         has_images=False,
         status="success",
+        provider=normalized_provider,
+        routing_profile=route.name,
+        resolved_model=resolved_model,
+        fallback_used=False,
+        plugin_flags=plugin_flags,
     )
     return reply_text, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
 
@@ -404,6 +415,10 @@ def request_spreadsheet_analysis_with_openai(
             has_images=False,
             status="failed",
             error_summary=str(exc),
+            provider=normalized_provider,
+            resolved_model=resolved_model,
+            fallback_used=False,
+            plugin_flags=plugin_flags_from_plugins([]),
         )
         raise
 
@@ -413,6 +428,10 @@ def request_spreadsheet_analysis_with_openai(
         has_files=True,
         has_images=False,
         status="success",
+        provider=normalized_provider,
+        resolved_model=resolved_model,
+        fallback_used=False,
+        plugin_flags=plugin_flags_from_plugins([]),
     )
     return analysis_text, extract_container_artifacts(response)
 

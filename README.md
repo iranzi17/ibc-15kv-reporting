@@ -67,6 +67,8 @@ The previous `app.py` god-file was split into clearer layers:
   session-state keys, persistent AI memory, runtime issue store, reset helpers
 - `services/openai_client.py`
   OpenRouter/OpenAI provider selection, key/model loading, SDK checks, general assistant requests
+- `services/model_routing.py`
+  task-based routing profiles, provider-aware model defaults, fallback models, OpenRouter plugin policy
 - `services/converter_service.py`
   contractor conversion/refinement logic, normalization, validation, locking, change summaries
 - `services/media_service.py`
@@ -124,6 +126,49 @@ Provider behavior:
 - OpenRouter mode uses Chat Completions for contractor conversion/refinement, structured JSON output, research, web plugin calls, image captioning, PDF/image/text attachments, and audio-input transcription on compatible models.
 - OpenAI mode remains available for Responses-only tools such as vector-store file search, Code Interpreter spreadsheet analysis, and text-to-speech readback.
 
+### Routing Profiles
+
+OpenRouter support is controlled through `services/model_routing.py`, not by scattering model names through UI code. The current routing profiles are:
+
+- `conversion_strict`
+  Structured contractor-to-consultant conversion with strict JSON output, file-parser support, and response-healing support.
+- `refinement_strict`
+  Structured refinement of converted rows with strict JSON output, file-parser support, and response-healing support.
+- `captioning_vision`
+  Site-photo captions with structured JSON output and optional one-retry fallback.
+- `general_chat_economy`
+  Secondary general assistant chat with lower token budget.
+- `research_tooling`
+  Research assistant routing with optional web/file-parser support.
+- `transcription_audio`
+  Voice-note transcription routing for OpenRouter audio input or OpenAI transcription.
+
+Each profile defines provider-specific primary and fallback models, temperature, token budget, structured-output requirements, and allowed OpenRouter plugins.
+
+Fallback behavior is intentionally limited:
+
+- Contractor conversion and contractor refinement retry once on transient provider/model availability failures.
+- Image captioning also retries once when the configured fallback model differs from the primary model.
+- Schema mismatches, validation errors, unsupported content, and deterministic parsing failures are not retried indefinitely.
+
+To override models without changing workflow code, set profile-specific environment variables:
+
+```powershell
+$env:OPENROUTER_CONVERSION_STRICT_PRIMARY_MODEL = "openai/gpt-4o-mini"
+$env:OPENROUTER_CONVERSION_STRICT_FALLBACK_MODEL = "openai/gpt-4o"
+$env:OPENROUTER_CAPTIONING_VISION_PRIMARY_MODEL = "openai/gpt-4o-mini"
+$env:OPENAI_RESEARCH_TOOLING_PRIMARY_MODEL = "gpt-5.4-mini"
+```
+
+The naming pattern is:
+
+```text
+<PROVIDER>_<ROUTING_PROFILE>_PRIMARY_MODEL
+<PROVIDER>_<ROUTING_PROFILE>_FALLBACK_MODEL
+```
+
+Profile-specific environment overrides take precedence over the general browser/session model field, so production model changes can be made without editing Streamlit workspace code.
+
 ## Google Credentials
 
 The app needs access to the reporting Google Sheet. Add the service account JSON to Streamlit secrets:
@@ -160,10 +205,14 @@ Each event records only known values:
 - timestamp
 - feature name
 - model
+- provider
+- routing profile
+- resolved model
+- whether fallback was used
+- enabled plugin flags
 - whether files were present
 - whether images were present
 - status
-- error summary when a request failed
 
 The diagnostics workspace also shows:
 
@@ -225,6 +274,8 @@ The refactor adds direct tests for:
 - converter validation and field locking
 - change summary behavior
 - usage logging summaries
+- routing profile resolution and fallback behavior
+- non-sensitive provider/routing usage metadata
 - existing AI helper flows
 - OpenRouter provider routing through the shared AI service layer
 - reporting/export compatibility

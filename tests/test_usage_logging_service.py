@@ -111,6 +111,35 @@ def test_log_usage_event_keeps_known_safe_model_identifiers(tmp_path, monkeypatc
     assert payload["model"] == "gpt-5.4-mini"
 
 
+def test_log_usage_event_records_safe_provider_routing_and_plugin_metadata(tmp_path, monkeypatch):
+    log_path = tmp_path / "usage.jsonl"
+    monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", log_path)
+
+    usage_logging.log_usage_event(
+        feature_name="contractor_conversion",
+        model="openai/gpt-4o-mini",
+        has_files=True,
+        has_images=True,
+        status="success",
+        provider="openrouter",
+        routing_profile="conversion_strict",
+        resolved_model="openai/gpt-4o",
+        fallback_used=True,
+        plugin_flags={"web": True, "file_parser": False, "response_healing": True},
+    )
+
+    payload = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert payload["provider"] == "openrouter"
+    assert payload["routing_profile"] == "conversion_strict"
+    assert payload["resolved_model"] == "openai/gpt-4o"
+    assert payload["fallback_used"] is True
+    assert payload["plugin_flags"] == {
+        "web": True,
+        "file_parser": False,
+        "response_healing": True,
+    }
+
+
 def test_log_usage_event_uses_allowlisted_feature_and_status(tmp_path, monkeypatch):
     log_path = tmp_path / "usage.jsonl"
     monkeypatch.setattr(usage_logging, "USAGE_LOG_FILE", log_path)
