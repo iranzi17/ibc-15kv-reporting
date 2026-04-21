@@ -8,7 +8,7 @@ from report import generate_reports
 from report_structuring import REPORT_HEADERS
 from services.converter_service import normalize_structured_rows
 from services.media_service import generate_ai_photo_captions_for_reports
-from services.openai_client import default_openai_model, load_openai_api_key, openai_sdk_ready
+from services.openai_client import active_ai_provider, default_ai_model, load_ai_api_key, openai_sdk_ready, provider_label
 from sheets import CACHE_FILE, append_rows_to_sheet, get_sheet_data, get_unique_sites_and_dates, load_offline_cache
 from streamlit_ui.helpers import (
     safe_button,
@@ -448,18 +448,21 @@ def render_reporting_workspace(
                 image_mapping = st.session_state.get("images", {})
                 image_caption_mapping = None
                 if gallery_settings["auto_caption_images"] and image_mapping:
-                    api_key = load_openai_api_key()
+                    active_provider = active_ai_provider()
+                    provider_name = provider_label(active_provider)
+                    api_key = load_ai_api_key(active_provider)
                     sdk_ready, sdk_error = openai_sdk_ready()
                     if api_key and sdk_ready:
                         try:
-                            with safe_spinner("Generating AI photo captions..."):
+                            with safe_spinner(f"Generating AI photo captions with {provider_name}..."):
                                 image_caption_mapping = generate_ai_photo_captions_for_reports(
                                     review_rows,
                                     image_mapping,
                                     api_key=api_key,
-                                    model=default_openai_model(),
+                                    model=default_ai_model(active_provider),
                                     discipline=discipline,
                                     persistent_guidance=active_guidance_text("captions", "converter"),
+                                    provider=active_provider,
                                 )
                         except Exception as caption_error:
                             image_caption_mapping = fallback_caption_mapping_for_images(image_mapping)
@@ -470,9 +473,9 @@ def render_reporting_workspace(
                                 details=str(caption_error),
                             )
                     elif not sdk_ready:
-                        st.warning(f"Photo captions skipped because the OpenAI SDK is unavailable. {sdk_error}")
+                        st.warning(f"Photo captions skipped because the OpenAI-compatible SDK is unavailable. {sdk_error}")
                     else:
-                        st.warning("Photo captions skipped because no OpenAI API key is configured.")
+                        st.warning(f"Photo captions skipped because no {provider_name} API key is configured.")
 
                 zip_bytes = generate_reports_with_gallery_options(
                     review_rows,

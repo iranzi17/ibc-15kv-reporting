@@ -20,7 +20,7 @@ from core.session_state import (
     save_saved_guidance_item,
     saved_guidance_items,
 )
-from services.openai_client import default_openai_model, load_openai_api_key, openai_sdk_ready
+from services.openai_client import active_ai_provider, default_ai_model, load_ai_api_key, openai_sdk_ready, provider_label
 from services.self_healing_service import request_self_healing_analysis_with_openai
 from services.usage_logging import read_usage_events, usage_counts
 from sheets import get_sheet_data
@@ -63,7 +63,7 @@ def apply_self_healing_actions(actions: list[str]) -> list[str]:
 def render_diagnostics_workspace() -> None:
     render_section_header(
         "4. System Diagnostics & Maintenance",
-        "Review runtime issues, recent OpenAI usage, and safe maintenance actions. This is an operational console, not a development lab.",
+        "Review runtime issues, recent AI usage, and safe maintenance actions. This is an operational console, not a development lab.",
     )
 
     usage_events = read_usage_events(limit=60)
@@ -78,21 +78,23 @@ def render_diagnostics_workspace() -> None:
     )
 
     render_subsection("Runtime Status", "Current session and local maintenance indicators.")
+    active_provider = active_ai_provider()
     diagnostics = {
         "openai_sdk_ready": openai_sdk_ready()[0],
-        "openai_key_loaded": bool(load_openai_api_key()),
+        "active_ai_provider": provider_label(active_provider),
+        "active_ai_key_loaded": bool(load_ai_api_key(active_provider)),
         "uploaded_photo_groups": len(st.session_state.get("images", {}) or {}),
         "caption_cache_entries": len(st.session_state.get(AI_IMAGE_CAPTIONS_KEY, {}) or {}),
         "knowledge_base_cached": bool(st.session_state.get(PROJECT_KNOWLEDGE_VECTOR_STORE_KEY)),
     }
     safe_write(diagnostics)
 
-    render_subsection("Recent Usage", "Recent OpenAI-powered actions captured in the local usage log.")
+    render_subsection("Recent Usage", "Recent AI-powered actions captured in the local usage log.")
     safe_write(usage_summary)
     if usage_events:
         safe_write(usage_events[:12])
     else:
-        render_note("No OpenAI usage events have been recorded yet.")
+        render_note("No AI usage events have been recorded yet.")
 
     issues = runtime_issue_items()
     render_subsection("Recent Runtime Issues", "Recent failures and warnings captured by the app.")
@@ -135,7 +137,7 @@ def render_diagnostics_workspace() -> None:
     ).strip()
     analyze_col, backlog_col = safe_columns(2, gap="large")
     with analyze_col:
-        analyze_clicked = st.button("Analyze with OpenAI")
+        analyze_clicked = st.button(f"Analyze with {provider_label(active_provider)}")
     with backlog_col:
         backlog_clicked = st.button("Save request to backlog")
 
@@ -152,18 +154,19 @@ def render_diagnostics_workspace() -> None:
         try:
             if not request_text:
                 raise ValueError("Enter an error or improvement request before running analysis.")
-            api_key = load_openai_api_key()
+            api_key = load_ai_api_key(active_provider)
             if not api_key:
-                raise ValueError("OpenAI API key is required for diagnostics analysis.")
+                raise ValueError(f"{provider_label(active_provider)} API key is required for diagnostics analysis.")
             sdk_ready, sdk_error = openai_sdk_ready()
             if not sdk_ready:
-                raise ValueError(f"OpenAI SDK is not installed in the active Streamlit environment. {sdk_error}")
+                raise ValueError(f"OpenAI-compatible SDK is not installed in the active Streamlit environment. {sdk_error}")
             result = request_self_healing_analysis_with_openai(
                 request_text,
                 api_key=api_key,
-                model=default_openai_model(),
+                model=default_ai_model(active_provider),
                 recent_issues=issues,
                 persistent_guidance=active_guidance_text("healing"),
+                provider=active_provider,
             )
         except Exception as exc:
             st.warning(f"Diagnostics analysis failed: {exc}")

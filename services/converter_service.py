@@ -8,12 +8,23 @@ import pandas as pd
 
 from report_structuring import REPORT_HEADERS
 from services.media_service import (
+    has_pdf_files,
     has_image_files,
     request_transcription_with_openai,
     uploaded_file_names,
+    uploaded_files_to_chat_content,
     uploaded_files_to_response_input,
 )
-from services.openai_client import converter_model, extract_openai_output_text
+from services.openai_client import (
+    PROVIDER_OPENAI,
+    PROVIDER_OPENROUTER,
+    converter_model,
+    extract_chat_completion_text,
+    extract_openai_output_text,
+    make_ai_client,
+    normalize_ai_provider,
+    provider_label,
+)
 from services.research_service import converter_response_options, extract_response_sources
 from services.usage_logging import log_usage_event
 
@@ -134,6 +145,23 @@ def contractor_refinement_response_schema() -> dict[str, object]:
     }
 
 
+def openrouter_plugins(
+    *,
+    allow_web_research: bool = False,
+    include_file_parser: bool = False,
+    include_response_healing: bool = False,
+) -> list[dict[str, object]]:
+    """Return OpenRouter plugins for chat-completion workflows."""
+    plugins: list[dict[str, object]] = []
+    if allow_web_research:
+        plugins.append({"id": "web"})
+    if include_file_parser:
+        plugins.append({"id": "file-parser", "pdf": {"engine": "cloudflare-ai"}})
+    if include_response_healing:
+        plugins.append({"id": "response-healing"})
+    return plugins
+
+
 def conversation_transcript(messages: list[dict[str, str]]) -> str:
     lines: list[str] = []
     for message in messages:
@@ -204,6 +232,7 @@ def prepare_refinement_inputs(
     refinement_audio_files: list[object] | None = None,
     api_key: str = "",
     discipline: str = "",
+    provider: str | None = PROVIDER_OPENAI,
 ) -> tuple[str, list[object]]:
     """Merge refinement attachments and voice notes into one refinement request."""
     combined_files = list(base_supporting_files or [])
@@ -214,12 +243,13 @@ def prepare_refinement_inputs(
     if not refinement_audio_files:
         return feedback, combined_files
     if not api_key:
-        raise ValueError("OpenAI API key is required for refinement voice notes.")
+        raise ValueError(f"{provider_label(provider)} API key is required for refinement voice notes.")
 
     transcript = request_transcription_with_openai(
         list(refinement_audio_files),
         api_key=api_key,
         discipline=discipline,
+        provider=provider,
     ).strip()
     if not transcript:
         return feedback, combined_files
@@ -303,9 +333,10 @@ def request_structured_reports_with_openai(
     supporting_files: list[object] | None = None,
     knowledge_vector_store_id: str = "",
     persistent_guidance: str = "",
+    provider: str | None = PROVIDER_OPENAI,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Turn raw contractor text into consultant-style report rows using OpenAI."""
-    from openai import OpenAI
+    """Turn raw contractor text into consultant-style report rows using the configured AI provider."""
+    normalized_provider = normalize_ai_provider(provider)
 
     source_file_names = uploaded_file_names(supporting_files)
     grounding_rule = (
@@ -347,37 +378,73 @@ def request_structured_reports_with_openai(
         prompt_sections.append(f"Attached source files: {', '.join(source_file_names)}")
     prompt_sections.append("Use all attached evidence only when it supports the extracted report fields.")
 
-    request_input: object = "\n\n".join(prompt_sections)
-    if supporting_files:
-        request_input = uploaded_files_to_response_input(str(request_input), uploaded_files=supporting_files)
+    request_text = "\n\n".join(prompt_sections)
 
     resolved_model = converter_model(
         model,
+        provider=normalized_provider,
         allow_web_research=allow_web_research,
         allow_file_search=bool(knowledge_vector_store_id),
     )
+    response = None
     try:
-        response = OpenAI(api_key=api_key).responses.create(
-            model=resolved_model,
-            instructions=instructions,
-            input=request_input,
-            text={
-                "format": {
+        client = make_ai_client(api_key=api_key, provider=normalized_provider)
+        if normalized_provider == PROVIDER_OPENROUTER:
+            request_kwargs: dict[str, object] = {
+                "model": resolved_model,
+                "messages": [
+                    {"role": "system", "content": instructions},
+                    {
+                        "role": "user",
+                        "content": uploaded_files_to_chat_content(
+                            request_text,
+                            uploaded_files=supporting_files,
+                        ),
+                    },
+                ],
+                "response_format": {
                     "type": "json_schema",
-                    "name": "consultant_daily_reports",
-                    "strict": True,
-                    "schema": consultant_report_response_schema(),
-                }
-            },
-            store=False,
-            **converter_response_options(
+                    "json_schema": {
+                        "name": "consultant_daily_reports",
+                        "strict": True,
+                        "schema": consultant_report_response_schema(),
+                    },
+                },
+            }
+            plugins = openrouter_plugins(
                 allow_web_research=allow_web_research,
-                knowledge_vector_store_id=knowledge_vector_store_id,
-            ),
-        )
-        payload_text = extract_openai_output_text(response)
+                include_file_parser=has_pdf_files(supporting_files),
+                include_response_healing=True,
+            )
+            if plugins:
+                request_kwargs["extra_body"] = {"plugins": plugins}
+            response = client.chat.completions.create(**request_kwargs)
+            payload_text = extract_chat_completion_text(response)
+        else:
+            request_input: object = request_text
+            if supporting_files:
+                request_input = uploaded_files_to_response_input(request_text, uploaded_files=supporting_files)
+            response = client.responses.create(
+                model=resolved_model,
+                instructions=instructions,
+                input=request_input,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "consultant_daily_reports",
+                        "strict": True,
+                        "schema": consultant_report_response_schema(),
+                    }
+                },
+                store=False,
+                **converter_response_options(
+                    allow_web_research=allow_web_research,
+                    knowledge_vector_store_id=knowledge_vector_store_id,
+                ),
+            )
+            payload_text = extract_openai_output_text(response)
         if not payload_text:
-            raise ValueError("OpenAI returned an empty structured output.")
+            raise ValueError(f"{provider_label(normalized_provider)} returned an empty structured output.")
         payload = json.loads(payload_text)
         rows = normalize_structured_rows(structured_report_rows(payload))
     except Exception as exc:
@@ -398,7 +465,7 @@ def request_structured_reports_with_openai(
         has_images=has_image_files(supporting_files),
         status="success",
     )
-    return rows, extract_response_sources(response)
+    return rows, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
 
 
 def request_refined_structured_reports_with_openai(
@@ -415,9 +482,10 @@ def request_refined_structured_reports_with_openai(
     supporting_files: list[object] | None = None,
     knowledge_vector_store_id: str = "",
     persistent_guidance: str = "",
+    provider: str | None = PROVIDER_OPENAI,
 ) -> tuple[str, list[dict[str, str]], list[dict[str, str]]]:
     """Apply user chat feedback to converted consultant rows."""
-    from openai import OpenAI
+    normalized_provider = normalize_ai_provider(provider)
 
     source_file_names = uploaded_file_names(supporting_files)
     grounding_rule = (
@@ -429,7 +497,7 @@ def request_refined_structured_reports_with_openai(
     instructions = textwrap.dedent(
         f"""
         You are an experienced consultant assistant revising a {discipline.lower()} daily consultant report.
-        The user is chatting with you to improve the converted report as if speaking to normal ChatGPT.
+        The user is chatting with you to improve the converted report through the app interface.
 
         Rules:
         - Return JSON that matches the schema exactly.
@@ -465,36 +533,71 @@ def request_refined_structured_reports_with_openai(
         """
     ).strip()
     request_input: object = request_text
-    if supporting_files:
+    if supporting_files and normalized_provider == PROVIDER_OPENAI:
         request_input = uploaded_files_to_response_input(request_text, uploaded_files=supporting_files)
 
     resolved_model = converter_model(
         model,
+        provider=normalized_provider,
         allow_web_research=allow_web_research,
         allow_file_search=bool(knowledge_vector_store_id),
     )
+    response = None
     try:
-        response = OpenAI(api_key=api_key).responses.create(
-            model=resolved_model,
-            instructions=instructions,
-            input=request_input,
-            text={
-                "format": {
+        client = make_ai_client(api_key=api_key, provider=normalized_provider)
+        if normalized_provider == PROVIDER_OPENROUTER:
+            request_kwargs: dict[str, object] = {
+                "model": resolved_model,
+                "messages": [
+                    {"role": "system", "content": instructions},
+                    {
+                        "role": "user",
+                        "content": uploaded_files_to_chat_content(
+                            request_text,
+                            uploaded_files=supporting_files,
+                        ),
+                    },
+                ],
+                "response_format": {
                     "type": "json_schema",
-                    "name": "consultant_report_refinement",
-                    "strict": True,
-                    "schema": contractor_refinement_response_schema(),
-                }
-            },
-            store=False,
-            **converter_response_options(
+                    "json_schema": {
+                        "name": "consultant_report_refinement",
+                        "strict": True,
+                        "schema": contractor_refinement_response_schema(),
+                    },
+                },
+            }
+            plugins = openrouter_plugins(
                 allow_web_research=allow_web_research,
-                knowledge_vector_store_id=knowledge_vector_store_id,
-            ),
-        )
-        payload_text = extract_openai_output_text(response)
+                include_file_parser=has_pdf_files(supporting_files),
+                include_response_healing=True,
+            )
+            if plugins:
+                request_kwargs["extra_body"] = {"plugins": plugins}
+            response = client.chat.completions.create(**request_kwargs)
+            payload_text = extract_chat_completion_text(response)
+        else:
+            response = client.responses.create(
+                model=resolved_model,
+                instructions=instructions,
+                input=request_input,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "consultant_report_refinement",
+                        "strict": True,
+                        "schema": contractor_refinement_response_schema(),
+                    }
+                },
+                store=False,
+                **converter_response_options(
+                    allow_web_research=allow_web_research,
+                    knowledge_vector_store_id=knowledge_vector_store_id,
+                ),
+            )
+            payload_text = extract_openai_output_text(response)
         if not payload_text:
-            raise ValueError("OpenAI returned an empty refinement output.")
+            raise ValueError(f"{provider_label(normalized_provider)} returned an empty refinement output.")
         payload = json.loads(payload_text)
         assistant_message = str(payload.get("assistant_message", "") or "").strip() or "I updated the converted consultant rows."
         rows = normalize_structured_rows(structured_report_rows(payload.get("reports", [])))
@@ -516,5 +619,5 @@ def request_refined_structured_reports_with_openai(
         has_images=has_image_files(supporting_files),
         status="success",
     )
-    return assistant_message, rows, extract_response_sources(response)
+    return assistant_message, rows, extract_response_sources(response) if normalized_provider == PROVIDER_OPENAI else []
 

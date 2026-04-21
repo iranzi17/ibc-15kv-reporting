@@ -36,7 +36,7 @@ The Streamlit app is organized into four workspaces:
 
 4. **System Diagnostics & Maintenance**
    - runtime issue history
-   - OpenAI usage log
+   - AI provider usage log
    - safe maintenance actions
    - maintenance backlog
 
@@ -66,7 +66,7 @@ The previous `app.py` god-file was split into clearer layers:
 - `core/session_state.py`
   session-state keys, persistent AI memory, runtime issue store, reset helpers
 - `services/openai_client.py`
-  OpenAI key/model loading, SDK checks, general assistant requests
+  OpenRouter/OpenAI provider selection, key/model loading, SDK checks, general assistant requests
 - `services/converter_service.py`
   contractor conversion/refinement logic, normalization, validation, locking, change summaries
 - `services/media_service.py`
@@ -76,7 +76,7 @@ The previous `app.py` god-file was split into clearer layers:
 - `services/self_healing_service.py`
   maintenance analysis helper
 - `services/usage_logging.py`
-  lightweight JSONL usage log for OpenAI-powered actions
+  lightweight JSONL usage log for AI-powered actions
 - `streamlit_ui/theme.py`
   restrained professional theme
 - `streamlit_ui/layout.py`
@@ -90,24 +90,39 @@ The previous `app.py` god-file was split into clearer layers:
 - `streamlit_ui/diagnostics_workspace.py`
   diagnostics and maintenance console
 
-## OpenAI Configuration
+## AI Provider Configuration
 
-Add your OpenAI API key either to Streamlit secrets or the environment:
+OpenRouter is the default AI provider. Add your OpenRouter API key either to Streamlit secrets or the environment:
 
 ```toml
 # .streamlit/secrets.toml
-OPENAI_API_KEY = "your-openai-api-key"
-OPENAI_MODEL = "gpt-4o-mini"
+OPENROUTER_API_KEY = "your-openrouter-api-key"
+OPENROUTER_MODEL = "openai/gpt-4o-mini"
+AI_PROVIDER = "openrouter"
 ```
 
 Or:
 
 ```powershell
-$env:OPENAI_API_KEY = "your-openai-api-key"
-$env:OPENAI_MODEL = "gpt-4o-mini"
+$env:OPENROUTER_API_KEY = "your-openrouter-api-key"
+$env:OPENROUTER_MODEL = "openai/gpt-4o-mini"
+$env:AI_PROVIDER = "openrouter"
 ```
 
-The advanced assistant settings panel also accepts a session-only API key in the browser.
+The **AI Provider & Model** panel also accepts a session-only API key and model in the browser.
+
+OpenAI remains supported as an optional secondary provider for workflows that still require OpenAI Responses tools:
+
+```toml
+OPENAI_API_KEY = "your-openai-api-key"
+OPENAI_MODEL = "gpt-4o-mini"
+AI_PROVIDER = "openai"
+```
+
+Provider behavior:
+
+- OpenRouter mode uses Chat Completions for contractor conversion/refinement, structured JSON output, research, web plugin calls, image captioning, PDF/image/text attachments, and audio-input transcription on compatible models.
+- OpenAI mode remains available for Responses-only tools such as vector-store file search, Code Interpreter spreadsheet analysis, and text-to-speech readback.
 
 ## Google Credentials
 
@@ -136,9 +151,9 @@ The contractor workflow includes stronger controls than the earlier implementati
 
 ## Diagnostics And Usage Logging
 
-OpenAI-powered features write lightweight local usage events to:
+AI-powered features write lightweight local usage events to:
 
-- `openai_usage_log.jsonl`
+- `ai_usage_log.jsonl`
 
 Each event records only known values:
 
@@ -210,6 +225,7 @@ The refactor adds direct tests for:
 - converter validation and field locking
 - change summary behavior
 - usage logging summaries
-- existing OpenAI helper flows
+- existing AI helper flows
+- OpenRouter provider routing through the shared AI service layer
 - reporting/export compatibility
 
