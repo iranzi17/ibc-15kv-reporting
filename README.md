@@ -181,6 +181,11 @@ GOOGLE_CREDENTIALS = """
 
 The legacy `gcp_service_account` secret is still accepted for backward compatibility.
 
+Share the configured Google Sheet with the service account `client_email` as an
+Editor. The app uses `SHEET_ID` and `SHEET_NAME` from `config.py` or environment
+overrides; if the wrong spreadsheet ID is configured, or if the tab/range is
+protected, append operations will fail with a Google Sheets permission error.
+
 ## Trust Controls In Contractor Conversion
 
 The contractor workflow includes stronger controls than the earlier implementation:
